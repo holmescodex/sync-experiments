@@ -90,3 +90,28 @@ The simulator drives the system by generating real-world events and routing the 
 5. **File transfer.** Support chunked file uploads and downloads as event sequences.
 
 These milestones mirror the sections in the larger design document and will guide development.
+
+
+## Encryption Notes
+
+We want the API to remain simple: the frontend submits events as JSON
+structures and the storage layer handles encryption automatically. To
+keep the initial design straightforward, each community will share a
+single pre‑shared key (PSK). The PSK is distributed out‑of‑band in an
+invite link.
+
+### Scheme
+
+* Events are serialized to JSON and then encrypted using an AEAD
+  algorithm (e.g. XChaCha20‑Poly1305 or AES‑GCM).
+* The entire JSON blob is encrypted so the database only stores an opaque
+  ciphertext.
+* A random nonce is generated per event. The nonce is stored alongside
+  the ciphertext. We can concatenate `nonce || ciphertext` and store it
+  as a BLOB.
+* Decryption uses the same PSK and nonce to recover the original JSON.
+
+This approach allows us to evolve the event format without exposing
+metadata in the clear. Later we can add more sophisticated key rotation
+or per‑member access control, but a community‑wide PSK is sufficient for
+initial experiments.
