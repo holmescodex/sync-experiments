@@ -22,13 +22,14 @@ The `event_id` is `hash(event_bytes)` where `event_bytes` is the canonical JSON 
 
 ## Encryption
 
-To keep things straightforward each community shares a single pre‑shared key (PSK). The PSK is distributed out-of-band in an invite link. Events are serialized to JSON and then encrypted using an AEAD algorithm such as XChaCha20‑Poly1305.
+To keep things straightforward each community shares a single pre‑shared key (PSK). The PSK is distributed out-of-band in an invite link. Events are serialized to JSON and then encrypted using an AEAD algorithm such as XChaCha20‑Poly1305 or AES‑GCM. The entire payload is encrypted so the database only stores an opaque BLOB.
 
-* A new random nonce is generated per event.
-* We store `nonce || ciphertext` as the value in the `events` table.
+* A random nonce is generated per event.
+* `nonce || ciphertext` is stored in the `events` table.
+* Decryption uses the same PSK and nonce to recover the original JSON.
 * The database never sees unencrypted fields; all metadata is derived after decryption.
 
-This allows the entire event payload to remain opaque while still supporting schema evolution.
+This approach hides metadata while allowing the event format to evolve. More sophisticated key rotation or per-member access control can be added later.
 
 ## Database Schema
 
