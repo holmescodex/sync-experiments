@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { SimulationEngine, type DeviceFrequency, type SimulationEvent } from './simulation/engine'
 import { DevicePanel, type DevicePanelRef } from './components/DevicePanel'
 import { SimulationControls } from './components/SimulationControls'
-import { EventFrequencyControls } from './components/EventFrequencyControls'
-import { SimulationEventLog } from './components/SimulationEventLog'
+import { CompactFrequencyControls } from './components/CompactFrequencyControls'
+import { UnifiedEventLog } from './components/UnifiedEventLog'
 import './App.css'
 
 function App() {
@@ -87,48 +87,56 @@ function App() {
         <p>Phase 1: Two-device message creation and storage</p>
       </header>
       
-      <main>
-        <div className="simulation-section">
-          <SimulationControls
-            currentTime={currentTime}
-            isRunning={isRunning}
-            speedMultiplier={speedMultiplier}
-            onPause={handlePause}
-            onResume={handleResume}
-            onSetSpeed={handleSetSpeed}
-            onReset={handleReset}
-          />
-        </div>
-        
-        <div className="frequency-section">
-          <EventFrequencyControls
-            frequencies={frequencies}
-            onUpdateFrequencies={handleFrequencyUpdate}
-          />
-        </div>
-        
-        <div className="timeline-section">
-          <SimulationEventLog
+      <main className="main-layout">
+        {/* Left Sidebar - Event Log */}
+        <aside className="event-sidebar">
+          <UnifiedEventLog
             currentTime={currentTime}
             upcomingEvents={upcomingEvents}
             executedEvents={executedEvents}
           />
-        </div>
+        </aside>
         
-        <div className="devices-section">
-          <div className="devices-grid">
-            <DevicePanel 
-              ref={aliceRef}
-              deviceId="alice" 
-              currentSimTime={currentTime} 
-              onManualMessage={handleManualMessage}
-            />
-            <DevicePanel 
-              ref={bobRef}
-              deviceId="bob" 
-              currentSimTime={currentTime} 
-              onManualMessage={handleManualMessage}
-            />
+        {/* Main Content Area */}
+        <div className="main-content">
+          {/* Top Controls */}
+          <div className="controls-section">
+            <div className="simulation-controls-container">
+              <SimulationControls
+                currentTime={currentTime}
+                isRunning={isRunning}
+                speedMultiplier={speedMultiplier}
+                onPause={handlePause}
+                onResume={handleResume}
+                onSetSpeed={handleSetSpeed}
+                onReset={handleReset}
+              />
+            </div>
+            
+            <div className="frequency-controls-container">
+              <CompactFrequencyControls
+                frequencies={frequencies}
+                onUpdateFrequencies={handleFrequencyUpdate}
+              />
+            </div>
+          </div>
+          
+          {/* Device Panels */}
+          <div className="devices-section">
+            <div className="devices-grid">
+              <DevicePanel 
+                ref={aliceRef}
+                deviceId="alice" 
+                currentSimTime={currentTime} 
+                onManualMessage={handleManualMessage}
+              />
+              <DevicePanel 
+                ref={bobRef}
+                deviceId="bob" 
+                currentSimTime={currentTime} 
+                onManualMessage={handleManualMessage}
+              />
+            </div>
           </div>
         </div>
       </main>
