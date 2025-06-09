@@ -29,8 +29,8 @@ Cypress.Commands.add('waitForSimulation', () => {
   // Wait for React app to load
   cy.get('[data-testid="simulation-app"]', { timeout: 10000 }).should('be.visible')
   
-  // Wait for devices to initialize
-  cy.get('.device-panel', { timeout: 5000 }).should('have.length', 2)
+  // Wait for chat interfaces to initialize
+  cy.get('.chat-interface', { timeout: 5000 }).should('have.length', 2)
   
   // Wait a moment for initial events to generate
   cy.wait(2000)

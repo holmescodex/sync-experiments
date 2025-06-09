@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { SimulationEngine, type DeviceFrequency, type SimulationEvent } from './simulation/engine'
-import { DevicePanel, type DevicePanelRef } from './components/DevicePanel'
+import { ChatInterface, type ChatInterfaceRef } from './components/ChatInterface'
 import { SimulationControls } from './components/SimulationControls'
-import { CompactFrequencyControls } from './components/CompactFrequencyControls'
-import { UnifiedEventLog } from './components/UnifiedEventLog'
+import { EventLogWithControls } from './components/EventLogWithControls'
 import './App.css'
 
 function App() {
@@ -18,8 +17,8 @@ function App() {
   const [upcomingEvents, setUpcomingEvents] = useState<SimulationEvent[]>([])
   const [executedEvents, setExecutedEvents] = useState<SimulationEvent[]>([])
   
-  const aliceRef = useRef<DevicePanelRef>(null)
-  const bobRef = useRef<DevicePanelRef>(null)
+  const aliceRef = useRef<ChatInterfaceRef>(null)
+  const bobRef = useRef<ChatInterfaceRef>(null)
 
   useEffect(() => {
     // Initialize engine with frequencies
@@ -82,55 +81,53 @@ function App() {
 
   return (
     <div className="app" data-testid="simulation-app">
-      <header>
-        <h1>P2P Event Store Simulation</h1>
-        <p>Phase 1: Two-device message creation and storage</p>
-      </header>
-      
-      <main className="main-layout">
-        {/* Left Sidebar - Event Log */}
-        <aside className="event-sidebar">
-          <UnifiedEventLog
+      <main className="app-layout">
+        {/* Left: Event Timeline & Controls */}
+        <section className="timeline-section">
+          <EventLogWithControls
             currentTime={currentTime}
             upcomingEvents={upcomingEvents}
             executedEvents={executedEvents}
+            frequencies={frequencies}
+            onUpdateFrequencies={handleFrequencyUpdate}
           />
-        </aside>
+        </section>
         
-        {/* Main Content Area */}
-        <div className="main-content">
-          {/* Top Controls */}
-          <div className="controls-section">
-            <div className="simulation-controls-container">
-              <SimulationControls
-                currentTime={currentTime}
-                isRunning={isRunning}
-                speedMultiplier={speedMultiplier}
-                onPause={handlePause}
-                onResume={handleResume}
-                onSetSpeed={handleSetSpeed}
-                onReset={handleReset}
-              />
+        {/* Right: Simulation & Chat */}
+        <section className="simulation-section">
+          <div className="simulation-controls">
+            <div className="section-header">
+              <h3>Simulation Controls</h3>
+              <p className="section-description">
+                Control simulation speed and timing. Messages are automatically routed to device chat interfaces.
+              </p>
             </div>
-            
-            <div className="frequency-controls-container">
-              <CompactFrequencyControls
-                frequencies={frequencies}
-                onUpdateFrequencies={handleFrequencyUpdate}
-              />
-            </div>
+            <SimulationControls
+              currentTime={currentTime}
+              isRunning={isRunning}
+              speedMultiplier={speedMultiplier}
+              onPause={handlePause}
+              onResume={handleResume}
+              onSetSpeed={handleSetSpeed}
+              onReset={handleReset}
+            />
           </div>
           
-          {/* Device Panels */}
-          <div className="devices-section">
-            <div className="devices-grid">
-              <DevicePanel 
+          <div className="chat-apps">
+            <div className="section-header">
+              <h3>Device Chat Interfaces</h3>
+              <p className="section-description">
+                Simulated messaging apps. Auto-generated messages appear here, or send manual messages.
+              </p>
+            </div>
+            <div className="chat-grid">
+              <ChatInterface 
                 ref={aliceRef}
                 deviceId="alice" 
                 currentSimTime={currentTime} 
                 onManualMessage={handleManualMessage}
               />
-              <DevicePanel 
+              <ChatInterface 
                 ref={bobRef}
                 deviceId="bob" 
                 currentSimTime={currentTime} 
@@ -138,7 +135,7 @@ function App() {
               />
             </div>
           </div>
-        </div>
+        </section>
       </main>
     </div>
   )
