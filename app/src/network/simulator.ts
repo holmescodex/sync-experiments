@@ -22,6 +22,7 @@ export interface DeviceNetworkState {
   receivedEventIds: Set<string>
   knownEventCount: number
   totalEventCount: number
+  ownEventCount: number
 }
 
 export class NetworkSimulator {
@@ -56,7 +57,8 @@ export class NetworkSimulator {
       isOnline: true,
       receivedEventIds: new Set(),
       knownEventCount: 0,
-      totalEventCount: 0
+      totalEventCount: 0,
+      ownEventCount: 0
     })
   }
 
@@ -161,6 +163,14 @@ export class NetworkSimulator {
     device.knownEventCount = device.receivedEventIds.size
   }
 
+  // Track when a device generates its own event
+  trackOwnEvent(deviceId: string) {
+    const device = this.devices.get(deviceId)
+    if (device) {
+      device.ownEventCount++
+    }
+  }
+
   // Update total event count for sync calculation
   updateTotalEventCount(count: number) {
     for (const device of this.devices.values()) {
@@ -174,8 +184,14 @@ export class NetworkSimulator {
       return { isSynced: true, syncPercentage: 100 }
     }
 
-    const syncPercentage = Math.round((device.knownEventCount / device.totalEventCount) * 100)
-    const isSynced = device.knownEventCount >= device.totalEventCount
+    // Sync percentage = (own events + received events) / total events
+    // This represents "what percentage of the total conversation does this device have?"
+    const eventsThisDeviceHas = device.ownEventCount + device.knownEventCount
+    const syncPercentage = Math.round((eventsThisDeviceHas / device.totalEventCount) * 100)
+    
+    // Device is synced if it has all events (own + all others)
+    const expectedReceivedEvents = device.totalEventCount - device.ownEventCount
+    const isSynced = device.knownEventCount >= expectedReceivedEvents
     
     return { isSynced, syncPercentage }
   }

@@ -38,14 +38,8 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     const handleSendMessage = () => {
       if (!inputValue.trim()) return
       
-      const newMessage: Message = {
-        id: `manual-${Date.now()}`,
-        content: inputValue.trim(),
-        timestamp: currentSimTime,
-        fromSimulation: false
-      }
-      
-      setMessages(prev => [...prev, newMessage])
+      // Only notify the parent - don't add message locally
+      // The message will come back through the simulation engine
       onManualMessage(deviceId, inputValue.trim())
       setInputValue('')
     }
@@ -62,7 +56,7 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     }
 
     return (
-      <div className="chat-interface">
+      <div className="chat-interface" data-testid={`chat-${deviceId}`}>
         <div className="chat-header">
           <div className="device-avatar">
             <span className={`avatar device-${deviceId}`}>
@@ -74,7 +68,10 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
             <div className="status-indicators">
               <span className="status-indicator online">● Online</span>
               {syncStatus && (
-                <span className={`status-indicator sync ${syncStatus.isSynced ? 'synced' : 'syncing'}`}>
+                <span 
+                  className={`status-indicator sync ${syncStatus.isSynced ? 'synced' : 'syncing'}`}
+                  data-testid="sync-indicator"
+                >
                   {syncStatus.isSynced ? '● Synced' : `● Syncing (${syncStatus.syncPercentage}%)`}
                 </span>
               )}
@@ -92,15 +89,12 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
             messages.map((message) => (
               <div 
                 key={message.id} 
-                className={`message ${message.fromSimulation ? 'simulated' : 'manual'}`}
+                className="message sent"
               >
                 <div className="message-bubble">
                   <div className="message-content">{message.content}</div>
                   <div className="message-time">
                     {formatTime(message.timestamp)}
-                    {message.fromSimulation && (
-                      <span className="sim-badge">auto</span>
-                    )}
                   </div>
                 </div>
               </div>

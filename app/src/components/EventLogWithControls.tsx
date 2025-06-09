@@ -132,10 +132,10 @@ export function EventLogWithControls({
           </span>
         </div>
         
-        <div className="event-timeline">
+        <div className="event-timeline" data-testid="event-timeline">
           {/* Recent executed events */}
           {recentExecuted.map((event, index) => (
-            <div key={`executed-${index}`} className="timeline-event executed">
+            <div key={`executed-${index}`} className="timeline-event executed" data-testid="executed-event">
               <div className="event-time">{getTimeAgo(event.simTime)}</div>
               <div className="event-content">
                 <span className={`device-indicator device-${event.deviceId}`}>
@@ -156,7 +156,7 @@ export function EventLogWithControls({
           
           {/* Upcoming events */}
           {upcomingLimited.map((event, index) => (
-            <div key={`upcoming-${index}`} className="timeline-event upcoming">
+            <div key={`upcoming-${index}`} className="timeline-event upcoming" data-testid="upcoming-event">
               <div className="event-time">{getTimeFromNow(event.simTime)}</div>
               <div className="event-content">
                 <span className={`device-indicator device-${event.deviceId}`}>

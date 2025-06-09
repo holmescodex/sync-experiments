@@ -19,6 +19,8 @@ export interface DeviceFrequency {
 }
 
 import { NetworkSimulator, type NetworkEvent, type NetworkConfig } from '../network/simulator'
+import { SyncManager } from '../sync/SyncManager'
+import type { DeviceDB } from '../storage/device-db'
 
 export interface NetworkMessageCallback {
   (deviceId: string, content: string, fromDevice: string): void
@@ -36,6 +38,8 @@ export class SimulationEngine {
   private nextEventId = 1
   private networkSimulator: NetworkSimulator
   private totalGeneratedEvents = 0
+  private syncManagers: Map<string, SyncManager> = new Map()
+  private deviceDatabases: Map<string, DeviceDB> = new Map()
 
   constructor() {
     this.networkSimulator = new NetworkSimulator()
@@ -93,8 +97,6 @@ export class SimulationEngine {
       data: { content, eventId }
     }
     this.eventTimeline.push(event)
-    this.totalGeneratedEvents++
-    this.networkSimulator.updateTotalEventCount(this.totalGeneratedEvents)
 
     // If event is for "now", execute immediately
     if (event.simTime <= this.currentTime) {
@@ -238,6 +240,13 @@ export class SimulationEngine {
     if (this.eventExecuteCallback) {
       this.eventExecuteCallback(event)
     }
+    
+    // Only count messages in total when they're actually sent
+    this.totalGeneratedEvents++
+    this.networkSimulator.updateTotalEventCount(this.totalGeneratedEvents)
+    
+    // Track that this device generated its own event
+    this.networkSimulator.trackOwnEvent(event.deviceId)
     
     // Send event over network to other devices
     if (event.type === 'message' && event.eventId) {
