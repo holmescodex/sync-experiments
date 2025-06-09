@@ -1,4 +1,5 @@
 import type { SimulationEvent, DeviceFrequency } from '../simulation/engine'
+import { SimulationControls } from './SimulationControls'
 
 interface EventLogWithControlsProps {
   currentTime: number
@@ -6,6 +7,12 @@ interface EventLogWithControlsProps {
   executedEvents: SimulationEvent[]
   frequencies: DeviceFrequency[]
   onUpdateFrequencies: (frequencies: DeviceFrequency[]) => void
+  isRunning: boolean
+  speedMultiplier: number
+  onPause: () => void
+  onResume: () => void
+  onSetSpeed: (speed: number) => void
+  onReset: () => void
 }
 
 export function EventLogWithControls({ 
@@ -13,7 +20,13 @@ export function EventLogWithControls({
   upcomingEvents, 
   executedEvents, 
   frequencies, 
-  onUpdateFrequencies 
+  onUpdateFrequencies,
+  isRunning,
+  speedMultiplier,
+  onPause,
+  onResume,
+  onSetSpeed,
+  onReset
 }: EventLogWithControlsProps) {
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000)
@@ -67,6 +80,18 @@ export function EventLogWithControls({
         <p className="section-description">
           Watch automatic message generation in real-time. Adjust frequency or disable generation per device.
         </p>
+      </div>
+      
+      <div className="simulation-controls-section">
+        <SimulationControls
+          currentTime={currentTime}
+          isRunning={isRunning}
+          speedMultiplier={speedMultiplier}
+          onPause={onPause}
+          onResume={onResume}
+          onSetSpeed={onSetSpeed}
+          onReset={onReset}
+        />
       </div>
       
       <div className="generation-controls">

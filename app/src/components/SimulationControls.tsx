@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React from 'react'
 
 interface SimulationControlsProps {
   currentTime: number
@@ -10,6 +10,16 @@ interface SimulationControlsProps {
   onReset: () => void
 }
 
+const SPEED_OPTIONS = [
+  { value: 0.5, label: '0.5x' },
+  { value: 1, label: '1x' },
+  { value: 2, label: '2x' },
+  { value: 5, label: '5x' },
+  { value: 10, label: '10x' },
+  { value: 50, label: '50x' },
+  { value: 100, label: '100x' }
+]
+
 export function SimulationControls({
   currentTime,
   isRunning,
@@ -19,14 +29,6 @@ export function SimulationControls({
   onSetSpeed,
   onReset
 }: SimulationControlsProps) {
-  const [speedInput, setSpeedInput] = useState(speedMultiplier.toString())
-
-  const handleSpeedChange = () => {
-    const newSpeed = parseFloat(speedInput)
-    if (!isNaN(newSpeed) && newSpeed > 0) {
-      onSetSpeed(newSpeed)
-    }
-  }
 
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000)
@@ -43,56 +45,58 @@ export function SimulationControls({
   }
 
   return (
-    <div className="simulation-controls">
-      <h2>Simulation Controls</h2>
-      
+    <div className="simulation-controls-content">
       <div className="time-display">
-        <h3>Simulation Time: {formatTime(currentTime)}</h3>
-        <p>Raw: {currentTime}ms</p>
+        <span className="time-label">Simulation Time:</span>
+        <span className="time-value">{formatTime(currentTime)}</span>
       </div>
       
-      <div className="playback-controls">
-        {isRunning ? (
-          <button onClick={onPause} className="pause-btn">
-            ⏸️ Pause
+      <div className="control-row">
+        <div className="playback-controls">
+          {isRunning ? (
+            <button 
+              onClick={onPause} 
+              className="control-btn pause-btn"
+              title="Pause simulation"
+            >
+              ⏸
+            </button>
+          ) : (
+            <button 
+              onClick={onResume} 
+              className="control-btn play-btn"
+              title="Resume simulation"
+            >
+              ▶
+            </button>
+          )}
+          
+          <button 
+            onClick={onReset} 
+            className="control-btn reset-btn"
+            title="Reset simulation to beginning"
+          >
+            ↻
           </button>
-        ) : (
-          <button onClick={onResume} className="play-btn">
-            ▶️ Play
-          </button>
-        )}
+        </div>
         
-        <button onClick={onReset} className="reset-btn">
-          🔄 Reset
-        </button>
-      </div>
-      
-      <div className="speed-controls">
-        <label>
-          Speed Multiplier:
-          <input
-            type="number"
-            min="0.1"
-            max="1000"
-            step="0.1"
-            value={speedInput}
-            onChange={(e) => setSpeedInput(e.target.value)}
-            onBlur={handleSpeedChange}
-            onKeyPress={(e) => e.key === 'Enter' && handleSpeedChange()}
-          />
-        </label>
-        <span>Current: {speedMultiplier}x</span>
-      </div>
-      
-      <div className="presets">
-        <button onClick={() => onSetSpeed(1)}>1x</button>
-        <button onClick={() => onSetSpeed(10)}>10x</button>
-        <button onClick={() => onSetSpeed(100)}>100x</button>
-        <button onClick={() => onSetSpeed(1000)}>1000x</button>
-      </div>
-      
-      <div className="status">
-        <p>Status: {isRunning ? '🟢 Running' : '🔴 Paused'}</p>
+        <div className="speed-controls">
+          <label className="speed-label" title="Adjust simulation playback speed">
+            Speed:
+          </label>
+          <select
+            value={speedMultiplier}
+            onChange={(e) => onSetSpeed(parseFloat(e.target.value))}
+            className="speed-select"
+            title={`Current speed: ${speedMultiplier}x`}
+          >
+            {SPEED_OPTIONS.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   )

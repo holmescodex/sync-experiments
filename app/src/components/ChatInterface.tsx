@@ -10,6 +10,7 @@ interface Message {
 interface ChatInterfaceProps {
   deviceId: string
   currentSimTime: number
+  syncStatus?: { isSynced: boolean, syncPercentage: number }
   onManualMessage: (deviceId: string, content: string) => void
 }
 
@@ -18,7 +19,7 @@ export interface ChatInterfaceRef {
 }
 
 export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
-  ({ deviceId, currentSimTime, onManualMessage }, ref) => {
+  ({ deviceId, currentSimTime, syncStatus, onManualMessage }, ref) => {
     const [messages, setMessages] = useState<Message[]>([])
     const [inputValue, setInputValue] = useState('')
 
@@ -70,7 +71,14 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
           </div>
           <div className="device-info">
             <h4>{deviceId}</h4>
-            <span className="status-indicator">● Online</span>
+            <div className="status-indicators">
+              <span className="status-indicator online">● Online</span>
+              {syncStatus && (
+                <span className={`status-indicator sync ${syncStatus.isSynced ? 'synced' : 'syncing'}`}>
+                  {syncStatus.isSynced ? '● Synced' : `● Syncing (${syncStatus.syncPercentage}%)`}
+                </span>
+              )}
+            </div>
           </div>
         </div>
         

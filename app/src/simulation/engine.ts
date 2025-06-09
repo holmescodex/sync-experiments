@@ -4,6 +4,7 @@ export interface SimulationEvent {
   deviceId: string
   data: any
   executed?: boolean
+  eventId?: string
 }
 
 export interface EventTimeline {
@@ -17,6 +18,12 @@ export interface DeviceFrequency {
   enabled: boolean
 }
 
+import { NetworkSimulator, type NetworkEvent, type NetworkConfig } from '../network/simulator'
+
+export interface NetworkMessageCallback {
+  (deviceId: string, content: string, fromDevice: string): void
+}
+
 export class SimulationEngine {
   private currentTime = 0
   private isRunning = true // Start running by default for tests
@@ -24,8 +31,28 @@ export class SimulationEngine {
   private tickInterval = 100 // 100ms real-time per tick
   private eventTimeline: SimulationEvent[] = []
   private eventExecuteCallback?: (event: SimulationEvent) => void
+  private networkMessageCallback?: NetworkMessageCallback
   private deviceFrequencies: DeviceFrequency[] = []
   private nextEventId = 1
+  private networkSimulator: NetworkSimulator
+  private totalGeneratedEvents = 0
+
+  constructor() {
+    this.networkSimulator = new NetworkSimulator()
+    
+    // Set up network message delivery
+    this.networkSimulator.onNetworkEvent((networkEvent: NetworkEvent) => {
+      if (networkEvent.status === 'delivered' && networkEvent.type === 'message') {
+        if (this.networkMessageCallback) {
+          this.networkMessageCallback(
+            networkEvent.targetDevice, 
+            networkEvent.payload.content,
+            networkEvent.sourceDevice
+          )
+        }
+      }
+    })
+  }
 
   currentSimTime(): number {
     return this.currentTime
@@ -49,18 +76,25 @@ export class SimulationEngine {
     // Advance simulation time by tick * speed
     this.currentTime += this.tickInterval * this.speedMultiplier
 
+    // Update network simulator
+    this.networkSimulator.tick(this.currentTime)
+
     // Execute all events that should have happened by now
     this.executeEventsUpToTime(this.currentTime)
   }
 
   createMessageEvent(deviceId: string, content: string, simTime?: number) {
+    const eventId = `msg-${deviceId}-${this.nextEventId++}`
     const event: SimulationEvent = {
       simTime: simTime ?? this.currentTime,
       type: 'message',
       deviceId,
-      data: { content }
+      eventId,
+      data: { content, eventId }
     }
     this.eventTimeline.push(event)
+    this.totalGeneratedEvents++
+    this.networkSimulator.updateTotalEventCount(this.totalGeneratedEvents)
 
     // If event is for "now", execute immediately
     if (event.simTime <= this.currentTime) {
@@ -83,8 +117,18 @@ export class SimulationEngine {
     this.eventExecuteCallback = callback
   }
 
+  onNetworkMessage(callback: NetworkMessageCallback) {
+    this.networkMessageCallback = callback
+  }
+
   setDeviceFrequencies(frequencies: DeviceFrequency[]) {
     this.deviceFrequencies = [...frequencies]
+    
+    // Add devices to network simulator
+    frequencies.forEach(freq => {
+      this.networkSimulator.addDevice(freq.deviceId)
+    })
+    
     this.generateUpcomingEvents()
   }
 
@@ -116,15 +160,19 @@ export class SimulationEngine {
       let nextEventTime = this.currentTime + this.randomInterval(avgInterval)
       
       while (nextEventTime < endTime) {
+        const eventId = `msg-${freq.deviceId}-${this.nextEventId++}`
         this.eventTimeline.push({
           simTime: nextEventTime,
           type: 'message',
           deviceId: freq.deviceId,
+          eventId,
           data: { 
             content: this.generateRandomMessage(),
-            simulation_event_id: this.nextEventId++
+            simulation_event_id: this.nextEventId,
+            eventId
           }
         })
+        this.totalGeneratedEvents++
         
         // Schedule next event with some randomness
         nextEventTime += this.randomInterval(avgInterval)
@@ -133,6 +181,9 @@ export class SimulationEngine {
     
     // Sort timeline by time
     this.eventTimeline.sort((a, b) => a.simTime - b.simTime)
+    
+    // Update network simulator with total event count
+    this.networkSimulator.updateTotalEventCount(this.totalGeneratedEvents)
   }
 
   private randomInterval(avgInterval: number): number {
@@ -187,6 +238,39 @@ export class SimulationEngine {
     if (this.eventExecuteCallback) {
       this.eventExecuteCallback(event)
     }
-    // Future: Actually create the message/file in device database
+    
+    // Send event over network to other devices
+    if (event.type === 'message' && event.eventId) {
+      this.networkSimulator.broadcastEvent(event.deviceId, 'message', {
+        content: event.data.content,
+        eventId: event.eventId,
+        timestamp: event.simTime
+      })
+    }
+  }
+
+  // Network-related methods
+  getNetworkSimulator(): NetworkSimulator {
+    return this.networkSimulator
+  }
+
+  getNetworkEvents(limit?: number) {
+    return this.networkSimulator.getNetworkEvents(limit)
+  }
+
+  getNetworkStats() {
+    return this.networkSimulator.getNetworkStats()
+  }
+
+  getNetworkConfig(): NetworkConfig {
+    return this.networkSimulator.getConfig()
+  }
+
+  updateNetworkConfig(config: Partial<NetworkConfig>) {
+    this.networkSimulator.updateConfig(config)
+  }
+
+  getDeviceSyncStatus() {
+    return this.networkSimulator.getAllDeviceSyncStatus()
   }
 }
