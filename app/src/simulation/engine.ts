@@ -43,6 +43,7 @@ export class SimulationEngine {
   private networkMessageCallback?: NetworkMessageCallback
   private deviceFrequencies: DeviceFrequency[] = []
   private nextEventId = 1
+  private manualTimelineLoaded = false
   private deviceOfflineStatus: Map<string, boolean> = new Map()
   private networkSimulator: NetworkSimulator
   private totalGeneratedEvents = 0
@@ -176,6 +177,7 @@ export class SimulationEngine {
 
   loadEventTimeline(events: SimulationEvent[]) {
     this.eventTimeline = events.sort((a, b) => a.simTime - b.simTime)
+    this.manualTimelineLoaded = true
   }
 
   exportEventTimeline(): EventTimeline {
@@ -346,8 +348,8 @@ export class SimulationEngine {
       await this.executeEvent(event)
     }
     
-    // Only regenerate events if we have device frequencies configured
-    if (this.deviceFrequencies.length > 0) {
+    // Only regenerate events if we have device frequencies configured and no manual timeline
+    if (this.deviceFrequencies.length > 0 && !this.manualTimelineLoaded) {
       const upcomingEvents = this.eventTimeline.filter(e => !e.executed && e.simTime > targetTime)
       if (upcomingEvents.length < 5) {
         this.generateUpcomingEvents()
@@ -592,6 +594,7 @@ export class SimulationEngine {
     
     // Clear timelines and events
     this.eventTimeline = []
+    this.manualTimelineLoaded = false
     
     // Clear device state
     this.deviceFrequencies = []

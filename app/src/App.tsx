@@ -5,12 +5,12 @@ import { EventLogWithControls } from './components/EventLogWithControls'
 import { NetworkEventLog } from './components/NetworkEventLog'
 import { HowItWorksArticle } from './components/HowItWorksArticle'
 import { DevConsoleMonitor } from './components/DevConsoleMonitor'
-import type { NetworkEvent } from './network/simulator'
-import { createChatAPI, type ChatAPI } from './api/ChatAPI'
+import type { NetworkEvent, NetworkConfig } from './network/simulator'
 import { BackendAdapter } from './api/BackendAdapter'
 import { simulationEngineAPI } from './api/SimulationEngineAPI'
 import { BackendNetworkAPI } from './api/BackendNetworkAPI'
 import { BackendStatsAPI } from './api/BackendStatsAPI'
+import { SimulationControlAPI } from './api/SimulationControlAPI'
 import './App.css'
 
 function App() {
@@ -29,15 +29,15 @@ function App() {
   const [networkEvents, setNetworkEvents] = useState<NetworkEvent[]>([])
   const [syncStatus, setSyncStatus] = useState<Map<string, { isSynced: boolean, syncPercentage: number }>>(new Map())
   const [databasesInitialized, setDatabasesInitialized] = useState(false)
-  const [chatAPIs, setChatAPIs] = useState<Map<string, ChatAPI>>(new Map())
   const [backendAdapters, setBackendAdapters] = useState<Map<string, BackendAdapter>>(new Map())
   const [databaseStats, setDatabaseStats] = useState<Map<string, { eventCount: number, syncPercentage: number }>>(new Map())
   const [showIndicator, setShowIndicator] = useState(true)
   const [backendNetworkAPI] = useState(() => new BackendNetworkAPI())
   const [backendStatsAPIs] = useState(() => new Map<string, BackendStatsAPI>([
-    ['alice', new BackendStatsAPI('http://localhost:3001')],
-    ['bob', new BackendStatsAPI('http://localhost:3002')]
+    ['alice', new BackendStatsAPI(import.meta.env.VITE_ALICE_BACKEND_URL || 'http://localhost:3001')],
+    ['bob', new BackendStatsAPI(import.meta.env.VITE_BOB_BACKEND_URL || 'http://localhost:3002')]
   ]))
+  const [simulationControlAPI] = useState(() => new SimulationControlAPI(import.meta.env.VITE_SIMULATION_CONTROL_URL || 'http://localhost:3005'))
   const [backendNetworkConfig, setBackendNetworkConfig] = useState<NetworkConfig>({ 
     packetLossRate: 0, 
     minLatency: 10, 
@@ -56,54 +56,75 @@ function App() {
   const bobRef = useRef<ChatInterfaceRef>(null)
 
   useEffect(() => {
-    // Initialize backend adapters
+    // Initialize backend adapters and simulation control
     const initBackendAdapters = async () => {
       const adapters = new Map<string, BackendAdapter>()
-      
-      // Wait for chatAPIs to be initialized
-      if (chatAPIs.size === 0) return
       
       // Try to connect to backend servers
       try {
         // Check if alice backend is available
-        const aliceBackendUrl = 'http://localhost:3001'
+        const aliceBackendUrl = import.meta.env.VITE_ALICE_BACKEND_URL || 'http://localhost:3001'
         const aliceResponse = await fetch(`${aliceBackendUrl}/api/health`).catch(() => null)
         if (aliceResponse?.ok) {
           console.log('[App] Alice backend detected at', aliceBackendUrl)
           adapters.set('alice', new BackendAdapter('alice', aliceBackendUrl))
         } else {
-          // Fallback to local ChatAPI
-          const aliceAPI = chatAPIs.get('alice')
-          if (aliceAPI) {
-            console.log('[App] Using local ChatAPI for alice')
-            adapters.set('alice', new BackendAdapter('alice', undefined, aliceAPI))
-          }
+          console.log('[App] Alice backend not available at', aliceBackendUrl)
         }
         
         // Check if bob backend is available
-        const bobBackendUrl = 'http://localhost:3002'
+        const bobBackendUrl = import.meta.env.VITE_BOB_BACKEND_URL || 'http://localhost:3002'
         const bobResponse = await fetch(`${bobBackendUrl}/api/health`).catch(() => null)
         if (bobResponse?.ok) {
           console.log('[App] Bob backend detected at', bobBackendUrl)
           adapters.set('bob', new BackendAdapter('bob', bobBackendUrl))
         } else {
-          // Fallback to local ChatAPI
-          const bobAPI = chatAPIs.get('bob')
-          if (bobAPI) {
-            console.log('[App] Using local ChatAPI for bob')
-            adapters.set('bob', new BackendAdapter('bob', undefined, bobAPI))
-          }
+          console.log('[App] Bob backend not available at', bobBackendUrl)
         }
       } catch (error) {
-        console.warn('[App] Error initializing backend adapters:', error)
+        // Better error handling with meaningful messages
+        if (error instanceof Error) {
+          console.warn('[App] Error initializing backend adapters:', error.message)
+        } else {
+          console.warn('[App] Error initializing backend adapters:', String(error))
+        }
       }
       
       setBackendAdapters(adapters)
       console.log('[App] Backend adapters initialized:', Array.from(adapters.entries()).map(([id, adapter]) => `${id}: ${adapter.getBackendType()}`))
+      
+      // Initialize simulation control if available
+      try {
+        const simHealthy = await simulationControlAPI.health()
+        if (simHealthy) {
+          console.log('[App] Simulation control backend detected')
+          
+          // Load current configuration
+          const config = await simulationControlAPI.getConfig()
+          setGlobalMessagesPerHour(config.globalMessagesPerHour)
+          setImageAttachmentPercentage(config.imageAttachmentPercentage)
+          setSpeedMultiplier(config.simulationSpeed)
+          setIsRunning(config.isRunning)
+          
+          // Update device states
+          const updatedFrequencies = frequencies.map(freq => ({
+            ...freq,
+            enabled: config.enabledDevices.includes(freq.deviceId)
+          }))
+          setFrequencies(updatedFrequencies)
+          
+          console.log('[App] Loaded simulation config from backend:', config)
+        } else {
+          console.log('[App] Simulation control backend not available')
+        }
+      } catch (error) {
+        console.warn('[App] Could not connect to simulation control backend:', error)
+      }
     }
     
-    initBackendAdapters()
-  }, [chatAPIs])
+    // Initialize after a short delay to ensure backends are ready
+    setTimeout(initBackendAdapters, 1000)
+  }, [])
 
   useEffect(() => {
     // Initialize engine with global rate distributed across enabled devices
@@ -119,39 +140,6 @@ function App() {
       await engine.setDeviceFrequencies(updatedFrequencies)
       engine.setImageAttachmentPercentage(imageAttachmentPercentage)
       setDatabasesInitialized(true)
-      
-      // Create ChatAPI instances for each device
-      const apis = new Map<string, ChatAPI>()
-      for (const freq of updatedFrequencies) {
-        const api = createChatAPI(freq.deviceId, engine)
-        if (api) {
-          apis.set(freq.deviceId, api)
-        }
-      }
-      setChatAPIs(apis)
-      
-      // Set up event execution callback
-      engine.onEventExecute((event: SimulationEvent) => {
-        setExecutedEvents(prev => [...prev, event])
-        
-        // Route event to appropriate device (only for self-generated events)
-        if (event.type === 'message') {
-          if (event.deviceId === 'alice' && aliceRef.current) {
-            aliceRef.current.handleSimulationMessage(event.data.content, event.data.attachments)
-          } else if (event.deviceId === 'bob' && bobRef.current) {
-            bobRef.current.handleSimulationMessage(event.data.content, event.data.attachments)
-          }
-        }
-      })
-      
-      // Set up network message callback for cross-device messaging
-      engine.onNetworkMessage((deviceId: string, content: string, fromDevice: string) => {
-        if (deviceId === 'alice' && aliceRef.current) {
-          aliceRef.current.handleSimulationMessage(content)
-        } else if (deviceId === 'bob' && bobRef.current) {
-          bobRef.current.handleSimulationMessage(content)
-        }
-      })
     }
     
     initializeEngine()
@@ -165,6 +153,37 @@ function App() {
       // Always fetch network events from backend
       const backendEvents = await backendNetworkAPI.getNetworkEvents(1000)
       setNetworkEvents(backendEvents)
+      
+      // Fetch messages from backends and convert to SimulationEvents
+      const allEvents: SimulationEvent[] = []
+      for (const [deviceId, adapter] of backendAdapters) {
+        try {
+          const messages = await adapter.getMessages()
+          // Convert messages to SimulationEvents for the timeline
+          messages.forEach(msg => {
+            allEvents.push({
+              type: 'message',
+              deviceId: msg.author,
+              simTime: msg.timestamp,
+              executeTime: msg.timestamp,
+              data: {
+                content: msg.content,
+                attachments: msg.attachments
+              }
+            })
+          })
+        } catch (err) {
+          if (err instanceof Error) {
+            console.error(`Failed to fetch messages for ${deviceId}:`, err.message)
+          } else {
+            console.error(`Failed to fetch messages for ${deviceId}:`, String(err))
+          }
+        }
+      }
+      
+      // Sort by timestamp
+      allEvents.sort((a, b) => a.simTime - b.simTime)
+      setExecutedEvents(allEvents)
       
       // Fetch device stats from backends
       const syncStatusMap = new Map<string, { isSynced: boolean, syncPercentage: number }>()
@@ -181,6 +200,13 @@ function App() {
             eventCount: stats.eventCount,
             syncPercentage: stats.syncPercentage
           })
+          
+          // Update frequencies with actual backend online status
+          setFrequencies(prev => prev.map(freq => 
+            freq.deviceId === deviceId 
+              ? { ...freq, isOnline: stats.isOnline }
+              : freq
+          ))
         }
       }
       
@@ -201,24 +227,12 @@ function App() {
         }
       }
       
-      // Debug logging every 5 seconds
-      if (Math.floor(engine.currentSimTime() / 5000) > Math.floor((engine.currentSimTime() - 100) / 5000)) {
-        const aliceDb = engine.getDeviceDatabase('alice')
-        const bobDb = engine.getDeviceDatabase('bob')
-        if (aliceDb && bobDb) {
-          const aliceEvents = await aliceDb.getAllEvents()
-          const bobEvents = await bobDb.getAllEvents()
-          console.log(`[APP DEBUG] Time: ${engine.currentSimTime()}ms - Alice: ${aliceEvents.length} events, Bob: ${bobEvents.length} events`)
-        }
-      }
     }, 100) // 100ms real-time ticks
 
     return () => {
       clearInterval(intervalId)
-      // Clean up ChatAPIs
-      chatAPIs.forEach(api => api.destroy())
     }
-  }, [engine, frequencies, globalMessagesPerHour])
+  }, [engine, frequencies, globalMessagesPerHour, backendAdapters])
 
   // Handle scroll to hide/show indicator
   useEffect(() => {
@@ -231,19 +245,43 @@ function App() {
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
-  const handlePause = () => {
+  const handlePause = async () => {
     engine.pause()
     setIsRunning(false)
+    
+    // Pause simulation in backend
+    try {
+      await simulationControlAPI.pause()
+      console.log('[App] Paused simulation control backend')
+    } catch (error) {
+      console.error('[App] Failed to pause simulation:', error)
+    }
   }
 
-  const handleResume = () => {
+  const handleResume = async () => {
     engine.resume()
     setIsRunning(true)
+    
+    // Resume simulation in backend
+    try {
+      await simulationControlAPI.start()
+      console.log('[App] Started simulation control backend')
+    } catch (error) {
+      console.error('[App] Failed to start simulation:', error)
+    }
   }
 
-  const handleSetSpeed = (speed: number) => {
+  const handleSetSpeed = async (speed: number) => {
     engine.setSpeed(speed)
     setSpeedMultiplier(speed)
+    
+    // Update speed in backend
+    try {
+      await simulationControlAPI.setSpeed(speed)
+      console.log(`[App] Updated simulation speed to ${speed}x`)
+    } catch (error) {
+      console.error('[App] Failed to update simulation speed:', error)
+    }
   }
 
   const handleReset = async () => {
@@ -252,7 +290,9 @@ function App() {
       if (adapter.getBackendType() === 'api') {
         try {
           // Clear backend database
-          const backendUrl = deviceId === 'alice' ? 'http://localhost:3001' : 'http://localhost:3002'
+          const backendUrl = deviceId === 'alice' 
+            ? (import.meta.env.VITE_ALICE_BACKEND_URL || 'http://localhost:3001')
+            : (import.meta.env.VITE_BOB_BACKEND_URL || 'http://localhost:3002')
           await fetch(`${backendUrl}/api/messages/clear`, { method: 'DELETE' })
           console.log(`[App] Cleared backend database for ${deviceId}`)
         } catch (error) {
@@ -278,16 +318,46 @@ function App() {
 
   const handleFrequencyUpdate = async (newFrequencies: DeviceFrequency[]) => {
     setFrequencies(newFrequencies)
-    // Frequencies will be recalculated in useEffect based on global rate
+    
+    // Update device enable/disable states in simulation control backend
+    for (const freq of newFrequencies) {
+      try {
+        await simulationControlAPI.setDeviceEnabled(freq.deviceId, freq.enabled)
+        console.log(`[App] Updated ${freq.deviceId} enabled state to ${freq.enabled}`)
+      } catch (error) {
+        console.error(`[App] Failed to update ${freq.deviceId} enabled state:`, error)
+      }
+    }
   }
 
-  const handleGlobalMessagesPerHourUpdate = (rate: number) => {
+  const handleGlobalMessagesPerHourUpdate = async (rate: number) => {
     setGlobalMessagesPerHour(rate)
+    
+    // Update global rate in simulation control backend
+    try {
+      await simulationControlAPI.setGlobalMessageRate(rate)
+      console.log(`[App] Updated global message rate to ${rate} msg/hr`)
+    } catch (error) {
+      console.error('[App] Failed to update global message rate:', error)
+      // Show error to user
+      if (error instanceof Error && error.message.includes('Maximum 1000 messages/hour')) {
+        // Could show a toast or alert here
+        setGlobalMessagesPerHour(1000) // Cap at maximum
+      }
+    }
   }
 
-  const handleImagePercentageUpdate = (percentage: number) => {
+  const handleImagePercentageUpdate = async (percentage: number) => {
     setImageAttachmentPercentage(percentage)
-    engine.setImageAttachmentPercentage(percentage)
+    engine.setImageAttachmentPercentage(percentage) // Keep local engine in sync
+    
+    // Update attachment rate in simulation control backend
+    try {
+      await simulationControlAPI.setGlobalAttachmentRate(percentage)
+      console.log(`[App] Updated global attachment rate to ${percentage}%`)
+    } catch (error) {
+      console.error('[App] Failed to update attachment rate:', error)
+    }
   }
 
   const handleManualMessage = async (deviceId: string, content: string, attachments?: any[]) => {
@@ -417,7 +487,6 @@ function App() {
                   syncStatus={syncStatus.get('alice')}
                   imageAttachmentPercentage={imageAttachmentPercentage}
                   onManualMessage={handleManualMessage}
-                  chatAPI={chatAPIs.get('alice')}
                   backendAdapter={backendAdapters.get('alice')}
                   databaseStats={databaseStats.get('alice')}
                   isOnline={frequencies.find(f => f.deviceId === 'alice')?.isOnline ?? true}
@@ -430,7 +499,6 @@ function App() {
                   syncStatus={syncStatus.get('bob')}
                   imageAttachmentPercentage={imageAttachmentPercentage}
                   onManualMessage={handleManualMessage}
-                  chatAPI={chatAPIs.get('bob')}
                   backendAdapter={backendAdapters.get('bob')}
                   databaseStats={databaseStats.get('bob')}
                   isOnline={frequencies.find(f => f.deviceId === 'bob')?.isOnline ?? true}

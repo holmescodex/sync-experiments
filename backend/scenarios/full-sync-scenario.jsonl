@@ -1,0 +1,8 @@
+{"ts":1749574502076,"type":"message","device":"alice","content":"Message 1","source":"manual"}
+{"ts":1749574502124,"type":"message","device":"alice","content":"Let me know when you see this","source":"manual"}
+{"ts":1749574502139,"type":"message","device":"bob","content":"Reply 1","source":"manual"}
+{"ts":1749574502212,"type":"message","device":"alice","content":"Message 2","source":"manual"}
+{"ts":1749574502241,"type":"message","device":"bob","content":"Hi Alice!","source":"manual"}
+{"ts":1749574502278,"type":"message","device":"bob","content":"Reply 2","source":"manual"}
+{"ts":1749574502358,"type":"message","device":"bob","content":"Yes, I am here","source":"manual"}
+{"ts":1749574502465,"type":"message","device":"bob","content":"What updates do you have?","source":"manual"}

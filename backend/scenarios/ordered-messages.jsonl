@@ -1,0 +1,4 @@
+{"ts":1749574502598,"type":"message","device":"alice","content":"First message","source":"manual"}
+{"ts":1749574502652,"type":"message","device":"bob","content":"Second message","source":"manual"}
+{"ts":1749574502708,"type":"message","device":"alice","content":"Third message","source":"manual"}
+{"ts":1749574502763,"type":"message","device":"bob","content":"Fourth message","source":"manual"}

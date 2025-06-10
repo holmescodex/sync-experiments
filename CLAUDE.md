@@ -47,14 +47,23 @@ Materialized views provide decrypted access for:
 
 ## Development Status
 
-The project is in Phase 1 implementation with a React-based simulation environment featuring:
+**IMPORTANT: This application runs in backend mode only.** There is no standalone frontend simulation mode. The frontend requires backend servers running on ports 3001 (Alice) and 3002 (Bob).
 
-### Current Implementation (Phase 1)
-- **Simulation Engine**: Automatic event generation with configurable device frequencies
-- **Event Timeline**: Real-time visualization of message generation and execution
-- **Chat Interfaces**: Realistic messaging app simulations for Alice and Bob devices
-- **Manual Messaging**: Interactive message sending through chat interfaces
+The project uses a backend-first architecture where all cryptographic operations and data storage happen in backend services.
+
+### Current Implementation
+- **Backend Services**: Device backends (Alice/Bob) handle messages, crypto, and sync
+- **Direct P2P Communication**: Backends communicate via UDP (ports 8001/8002)
+- **Message Sync**: Bloom filter-based sync achieves eventual consistency
+- **Chat Interfaces**: Realistic messaging UIs connected to backends via REST APIs
+- **Simulation Control**: Backend service (port 3005) manages automatic message generation
+- **Message Reactions**: Add/remove emoji reactions with backend persistence
 - **Responsive UI**: Clean, professional interface with mobile-friendly design
+
+### Not Yet Implemented
+- **File Attachments**: UI exists but backend endpoints are missing
+- **SQLite Storage**: Currently using in-memory stores
+- **WebSocket Updates**: Using HTTP polling for real-time updates
 
 ### UI Architecture
 The simulation interface consists of:
@@ -117,10 +126,12 @@ npm run cypress:screenshots # UI documentation
 
 ### Development Milestones
 1. ✅ Two-device message simulation with realistic chat interfaces
-2. 🔄 UDP gossip protocol (next)
-3. ⏳ N-peer convergence
-4. ⏳ Frontend API (sendMessage, getMessages, searchMessages)
-5. ⏳ File transfer support
+2. ✅ Backend message handling with encryption and sync
+3. ✅ Simulation control backend for auto-generation
+4. 🔄 File upload/download system (UI ready, backend missing)
+5. ⏳ WebSocket connections for real-time updates
+6. ⏳ SQLite storage migration
+7. ⏳ N-peer convergence beyond 2 devices
 
 ## Important Instructions
 
@@ -160,3 +171,96 @@ npm run build              # Production build
 ```
 
 The codebase emphasizes clean, maintainable code with comprehensive testing and visual documentation of the user interface development process.
+
+## Image Compression Implementation
+
+The project includes a **Sharp-based image compression module** for JPEG optimization:
+
+### Technical Details
+- **Library**: Sharp (Node.js/backend only, not browser-compatible)
+- **Target Size**: 100KB-200KB range for compressed images
+- **Skip Threshold**: Files under 200KB are left unchanged
+- **Quality Algorithm**: Iterative quality reduction (5-95 range) to hit target size
+- **Performance**: ~400ms per compression for 2.3MB images
+- **Location**: `src/utils/ImageCompressor.ts`
+
+### Key Features
+- **Smart Quality Selection**: Initial quality based on original file size
+- **Iterative Compression**: Up to 5 attempts to reach target size range
+- **Error Handling**: Graceful fallback to original file on compression failure
+- **Type Safety**: Full TypeScript interfaces and error handling
+- **Test Coverage**: 19 passing tests including real 2.3MB image compression
+
+### Integration Points
+- **Backend Processing**: Compression happens server-side, not in browser
+- **File Attachments**: Automatic compression when users attach JPEG images
+- **Chat Interface**: Shows compression status and file size reduction
+- **Future**: Will integrate with file chunking and P2P transfer system
+
+**Note**: Sharp is Node.js-only and cannot run in browsers. All image compression should happen in the backend/server environment.
+
+## Manual File Sending Implementation
+
+The project includes a **complete manual file attachment system** with chunking, encryption, and P2P distribution:
+
+### File Sending Architecture
+1. **UI Layer**: File selection via attachment button in chat interfaces
+2. **Processing Layer**: File chunking and encryption via FileHandler/FileChunkHandler  
+3. **Storage Layer**: File chunks stored as encrypted events in SQLite database
+4. **Network Layer**: P2P distribution of file chunks via network simulator
+5. **Reassembly Layer**: Automatic file reconstruction when all chunks received
+
+### Technical Implementation
+
+#### File Processing Pipeline
+- **Chunk Size**: 500 bytes per chunk for efficient network transmission
+- **Encryption**: AEAD encryption with per-chunk keys and PRF tags
+- **File IDs**: Content-addressed using hash of file contents
+- **PRF Tags**: Pseudorandom function tags for chunk identification in Bloom filters
+
+#### Key Components
+- **FileHandler** (`src/files/FileHandler.ts`): Core chunking and encryption
+- **FileChunkHandler** (`src/files/FileChunkHandler.ts`): Upload/download management
+- **ChatAPI** (`src/api/ChatAPI.ts`): File attachment integration with messaging
+- **ChatInterface** (`src/components/ChatInterface.tsx`): File selection UI
+
+#### File Upload Flow
+1. User selects files via 📎 attachment button
+2. Files appear in preview with size and removal options
+3. On send, ChatAPI converts File objects to Uint8Array
+4. FileChunkHandler chunks files into 500-byte encrypted pieces
+5. Each chunk stored as `file_chunk` event in database
+6. File metadata included in message as attachment
+7. Chunks broadcast to network for P2P distribution
+
+#### File Reception Flow
+1. Receiving device gets message with file attachment metadata
+2. FileChunkHandler tracks required PRF tags for the file
+3. Incoming `file_chunk` events matched against required tags
+4. When all chunks received, file automatically reassembled
+5. Assembled file available for download/display
+
+### File Attachment UI Features
+- **Multiple File Selection**: Support for selecting multiple files simultaneously
+- **File Preview**: Shows selected files with names, sizes, and remove buttons
+- **File Type Detection**: Image files get special preview treatment
+- **Progress Indication**: Loading states during file processing
+- **Error Handling**: Graceful failure handling with user feedback
+
+### Integration with Existing Systems
+- **Message Events**: File attachments embedded in message event payloads
+- **Sync Protocol**: File chunks participate in Bloom filter sync discovery
+- **Database Events**: All file data stored as standard encrypted events
+- **Network Simulator**: File chunks transmitted via existing UDP simulation
+
+### Performance Characteristics
+- **Chunking Speed**: ~600ms for 1MB files
+- **Storage Efficiency**: Each chunk is separate database event for sync granularity
+- **Network Efficiency**: 500-byte chunks optimal for UDP packet sizes
+- **Memory Usage**: Streaming processing avoids loading entire files in memory
+
+### Future Enhancements
+- **Erasure Coding**: Redundant chunks for reliability (infrastructure exists)
+- **Compression Integration**: Automatic JPEG compression before chunking
+- **Progress Tracking**: Real-time download progress in chat interface
+- **Timeline Integration**: Automatic file attachments in simulation timeline

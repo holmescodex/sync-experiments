@@ -1,15 +1,7 @@
 import { MessageAPI } from './MessageAPI'
 import { ChatAPI } from './ChatAPI'
 import { simulationEngineAPI } from './SimulationEngineAPI'
-
-export interface Message {
-  id: string
-  author: string
-  content: string
-  timestamp: number
-  attachments?: any[]
-  isOwn?: boolean
-}
+import type { Message } from '../types/message'
 
 /**
  * Adapter that can use either the backend API or the local ChatAPI
@@ -34,7 +26,7 @@ export class BackendAdapter {
     }
   }
 
-  async sendMessage(content: string, attachments?: any[]): Promise<void> {
+  async sendMessage(content: string, attachments?: any[]): Promise<Message | null> {
     // Record to simulation engine (fire and forget)
     simulationEngineAPI.recordEvent({
       type: 'message',
@@ -47,19 +39,48 @@ export class BackendAdapter {
     })
     
     if (this.messageAPI) {
-      // Use backend API
-      await this.messageAPI.sendMessage(content, attachments)
+      // Use backend API - returns the message with real ID
+      const message = await this.messageAPI.sendMessage(content, attachments)
+      return {
+        ...message,
+        isOwn: message.author === this.deviceId
+      }
     } else if (this.chatAPI) {
       // Use local ChatAPI
       await this.chatAPI.sendMessage(content, attachments)
+      return null // ChatAPI doesn't return the message
+    }
+    
+    return null
+  }
+
+  async addReaction(messageId: string, emoji: string): Promise<void> {
+    if (this.messageAPI) {
+      // Use backend API
+      await this.messageAPI.addReaction(messageId, emoji)
+    } else if (this.chatAPI) {
+      // Use local ChatAPI
+      await this.chatAPI.addReaction(messageId, emoji)
+    }
+  }
+
+  async removeReaction(messageId: string, emoji: string): Promise<void> {
+    if (this.messageAPI) {
+      // Use backend API
+      await this.messageAPI.removeReaction(messageId, emoji)
+    } else if (this.chatAPI) {
+      // Use local ChatAPI
+      await this.chatAPI.removeReaction(messageId, emoji)
     }
   }
 
   async getMessages(): Promise<Message[]> {
     if (this.messageAPI) {
       // Use backend API
-      console.log(`[BackendAdapter ${this.deviceId}] Fetching messages since ${this.lastSyncTime}`)
-      const messages = await this.messageAPI.getMessages(this.lastSyncTime)
+      // On first load (lastSyncTime = 0), get all messages. Otherwise get since last sync.
+      const sinceTime = this.lastSyncTime === 0 ? undefined : this.lastSyncTime
+      console.log(`[BackendAdapter ${this.deviceId}] Fetching messages since ${sinceTime || 'beginning'}`)
+      const messages = await this.messageAPI.getMessages(sinceTime)
       console.log(`[BackendAdapter ${this.deviceId}] Received ${messages.length} messages`)
       
       if (messages.length > 0) {
@@ -68,19 +89,24 @@ export class BackendAdapter {
       }
       
       // Mark messages as own/received
-      return messages.map(msg => ({
-        ...msg,
-        isOwn: msg.author === this.deviceId
-      }))
+      return messages.map(msg => {
+        const isOwn = msg.author === this.deviceId
+        console.log(`[BackendAdapter] Message from ${msg.author}, deviceId=${this.deviceId}, isOwn=${isOwn}`)
+        return {
+          ...msg,
+          isOwn
+        }
+      })
     } else if (this.chatAPI) {
-      // Use local ChatAPI
-      const messages = await this.chatAPI.getMessages()
+      // Use local ChatAPI - this returns messages with reactions already included
+      const messages = await this.chatAPI.loadMessages()
       return messages.map(msg => ({
         id: msg.id,
         author: msg.author,
         content: msg.content,
         timestamp: msg.timestamp,
         attachments: msg.attachments,
+        reactions: msg.reactions,
         isOwn: msg.author === this.deviceId
       }))
     }

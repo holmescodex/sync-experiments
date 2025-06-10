@@ -1,8 +1,7 @@
 import { useState, useEffect, forwardRef, useImperativeHandle, useRef } from 'react'
-import type { ChatAPI, ChatMessage } from '../api/ChatAPI'
 import { BackendAdapter } from '../api/BackendAdapter'
 import { EmojiPicker } from './EmojiPicker'
-// Image compression moved to backend
+import type { Message, FileAttachment } from '../types/message'
 
 // Utility function for formatting file sizes
 const formatFileSize = (bytes: number): string => {
@@ -13,44 +12,12 @@ const formatFileSize = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
-interface FileAttachment {
-  id: string
-  type: 'image' | 'document' | 'video' | 'audio'
-  name: string
-  size: number
-  url?: string
-  contentId?: string
-  mimeType: string
-  loadingState?: 'pending' | 'loading' | 'loaded' | 'error'
-  loadingProgress?: number
-  originalSize?: number
-  compressed?: boolean
-  compressionRatio?: number
-  originalFile?: File // Store the original File object for sending
-}
-
-interface Message {
-  id: string
-  content: string
-  timestamp: number
-  fromSimulation?: boolean
-  attachments?: FileAttachment[]
-  isOwn?: boolean
-  author?: string
-  reactions?: Array<{
-    emoji: string
-    author: string
-    timestamp: number
-  }>
-}
-
 interface ChatInterfaceProps {
   deviceId: string
   currentSimTime: number
   syncStatus?: { isSynced: boolean, syncPercentage: number }
   imageAttachmentPercentage: number
   onManualMessage: (deviceId: string, content: string, attachments?: FileAttachment[]) => void
-  chatAPI?: ChatAPI | null
   backendAdapter?: BackendAdapter
   databaseStats?: { eventCount: number, syncPercentage: number }
   isOnline?: boolean
@@ -62,7 +29,7 @@ export interface ChatInterfaceRef {
 }
 
 export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
-  ({ deviceId, currentSimTime, syncStatus, imageAttachmentPercentage, onManualMessage, chatAPI, backendAdapter, databaseStats, isOnline = true, onToggleOnline }, ref) => {
+  ({ deviceId, currentSimTime, syncStatus, imageAttachmentPercentage, onManualMessage, backendAdapter, databaseStats, isOnline = true, onToggleOnline }, ref) => {
     const [messages, setMessages] = useState<Message[]>([])
     const [inputValue, setInputValue] = useState('')
     const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([])
@@ -72,53 +39,47 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     const fileInputRef = useRef<HTMLInputElement>(null)
     const messagesContainerRef = useRef<HTMLDivElement>(null)
 
-    // Subscribe to ChatAPI updates
+    // Subscribe to backend message updates
     useEffect(() => {
-      // Use backend adapter if available, otherwise fall back to chatAPI
-      if (backendAdapter) {
-        // Poll backend for messages
-        backendAdapter.startPolling((newMessages) => {
-          setMessages(prevMessages => {
-            // Merge new messages, avoiding duplicates
-            const existingIds = new Set(prevMessages.map(m => m.id))
-            const uniqueNewMessages = newMessages.filter(m => !existingIds.has(m.id))
-            return [...prevMessages, ...uniqueNewMessages]
-          })
-        })
-        
-        return () => {
-          backendAdapter.stopPolling()
-        }
-      } else if (chatAPI) {
-        // Use local chatAPI
-        const unsubscribe = chatAPI.onMessagesUpdate((apiMessages: ChatMessage[]) => {
-          // Convert ChatAPI messages to our Message format
-          const convertedMessages: Message[] = apiMessages.map(msg => ({
+      if (!backendAdapter) return
+      
+      // Poll backend for messages
+      backendAdapter.startPolling((newMessages) => {
+        setMessages(prevMessages => {
+          // Convert backend messages to our Message format
+          const convertedMessages: Message[] = newMessages.map(msg => ({
             id: msg.id,
             content: msg.content,
             timestamp: msg.timestamp,
             isOwn: msg.isOwn,
             author: msg.author,
-            fromSimulation: !msg.isOwn,
-            attachments: msg.attachments?.map(att => ({
-              id: `api-${att.fileId}`,
-              type: att.mimeType?.startsWith('image/') ? 'image' as const : 'document' as const,
-              name: att.fileName || 'file',
-              size: Math.round(att.chunkCount * 500), // Estimate from chunk count
-              url: `/test-images/${att.fileName}`, // For demo
-              mimeType: att.mimeType || 'application/octet-stream',
-              loadingState: 'loaded' as const
-            })),
+            fromSimulation: false,
+            attachments: msg.attachments,
             reactions: msg.reactions
           }))
-        setMessages(convertedMessages)
+          
+          // Create a map of all messages by ID for efficient lookup
+          const messageMap = new Map<string, Message>()
+          
+          // Add existing messages to map
+          prevMessages.forEach(msg => {
+            messageMap.set(msg.id, msg)
+          })
+          
+          // Update or add new messages (this will update reactions)
+          convertedMessages.forEach(msg => {
+            messageMap.set(msg.id, msg)
+          })
+          
+          // Return all messages sorted by timestamp
+          return Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp)
+        })
       })
       
       return () => {
-        unsubscribe()
+        backendAdapter.stopPolling()
       }
-    }
-    }, [chatAPI, backendAdapter])
+    }, [backendAdapter])
 
     // Auto-scroll to bottom when messages change
     useEffect(() => {
@@ -149,7 +110,9 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
           content,
           timestamp: currentSimTime,
           fromSimulation: true,
-          attachments: uiAttachments
+          attachments: uiAttachments,
+          isOwn: true, // Simulation messages from this device are also "own" messages
+          author: deviceId
         }
         setMessages(prev => [...prev, newMessage])
       }
@@ -159,39 +122,19 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
       const files = event.target.files
       if (!files) return
 
-      // Convert files to attachments with compression
-      const newAttachments: FileAttachment[] = []
-      
-      for (const file of Array.from(files)) {
-        const attachment: FileAttachment = {
-          id: `file-${Date.now()}-${Math.random()}`,
-          type: file.type.startsWith('image/') ? 'image' : 'document',
-          name: file.name,
-          size: file.size,
-          originalSize: file.size,
-          url: URL.createObjectURL(file),
-          mimeType: file.type,
-          loadingState: 'loading',
-          compressed: false,
-          originalFile: file // Store the original File object
-        }
-        
-        newAttachments.push(attachment)
-        
-        // File processing moved to backend - just mark as loaded
-        try {
-          // TODO: Send file to backend for compression and processing
-          attachment.loadingState = 'loaded'
-          
-          // Trigger re-render
-          setSelectedFiles(prev => [...prev])
-          
-        } catch (error) {
-          console.error('Error processing file:', error)
-          attachment.loadingState = 'error'
-          setSelectedFiles(prev => [...prev])
-        }
-      }
+      // Convert files to attachments
+      const newAttachments: FileAttachment[] = Array.from(files).map(file => ({
+        id: `file-${Date.now()}-${Math.random()}`,
+        type: file.type.startsWith('image/') ? 'image' : 'document',
+        name: file.name,
+        size: file.size,
+        originalSize: file.size,
+        url: URL.createObjectURL(file),
+        mimeType: file.type,
+        loadingState: 'loaded' as const,
+        compressed: false,
+        originalFile: file
+      }))
 
       setSelectedFiles(prev => [...prev, ...newAttachments])
       
@@ -201,65 +144,50 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
       }
     }
 
-    const getTestImageForFile = (file: File): string => {
-      // For demo purposes, map to our test images based on file characteristics
-      if (file.size > 50000) return 'abstract.jpg'
-      if (file.name.toLowerCase().includes('landscape')) return 'landscape.jpg'
-      if (file.name.toLowerCase().includes('portrait')) return 'portrait.jpg'
-      if (file.name.toLowerCase().includes('diagram')) return 'diagram.png'
-      return 'small.jpg'
-    }
-
     const removeFile = (fileId: string) => {
       setSelectedFiles(prev => prev.filter(f => f.id !== fileId))
     }
 
     const handleSendMessage = async () => {
-      console.log('[ChatInterface] handleSendMessage called', { inputValue, selectedFilesCount: selectedFiles.length })
-      
       if (!inputValue.trim() && selectedFiles.length === 0) {
-        console.log('[ChatInterface] No content or files, returning early')
         return
       }
       
       const content = inputValue.trim()
       const files = selectedFiles.length > 0 ? selectedFiles : undefined
       
-      console.log('[ChatInterface] Preparing to send', { content, hasFiles: !!files, chatAPI: !!chatAPI, backendAdapter: !!backendAdapter })
-      
       try {
-        // Priority: ChatAPI > BackendAdapter > Simulation Engine
-        if (chatAPI && selectedFiles.length > 0) {
-          console.log('[ChatInterface] Using ChatAPI path with files')
-          // Use the original File objects directly
-          const actualFiles: File[] = selectedFiles
-            .map(attachment => attachment.originalFile)
-            .filter((file): file is File => file !== undefined)
+        if (backendAdapter) {
+          // Immediately add message to local state (optimistic update)
+          const tempId = `temp-${Date.now()}-${Math.random()}`
+          const optimisticMessage: Message = {
+            id: tempId,
+            content,
+            timestamp: Date.now(),
+            isOwn: true,
+            author: deviceId,
+            attachments: files
+          }
+          setMessages(prev => [...prev, optimisticMessage])
           
-          console.log('[ChatInterface] Converted to actualFiles:', actualFiles.length)
+          // Send to backend and get the real message with ID
+          const sentMessage = await backendAdapter.sendMessage(content, files)
           
-          await chatAPI.sendMessageWithFiles(content, actualFiles)
-          console.log('[ChatInterface] ChatAPI.sendMessageWithFiles completed')
-          
-          // Also add to simulation timeline for visualization
-          console.log('[ChatInterface] Calling onManualMessage for timeline')
-          onManualMessage(deviceId, content, files)
-        } else if (chatAPI) {
-          console.log('[ChatInterface] Using ChatAPI path without files')
-          await chatAPI.sendMessage(content)
-        } else if (backendAdapter) {
-          console.log('[ChatInterface] Using BackendAdapter path')
-          await backendAdapter.sendMessage(content, files)
+          if (sentMessage) {
+            // Replace the temporary message with the real one
+            setMessages(prev => prev.map(msg => 
+              msg.id === tempId 
+                ? { ...sentMessage, attachments: files } 
+                : msg
+            ))
+          }
         } else {
-          console.log('[ChatInterface] Using fallback simulation engine path')
-          // Fallback to simulation engine
+          // Fallback: notify parent for simulation timeline
           onManualMessage(deviceId, content, files)
         }
         
-        console.log('[ChatInterface] Clearing input and files')
         setInputValue('')
         setSelectedFiles([])
-        console.log('[ChatInterface] Message sending completed successfully')
       } catch (error) {
         console.error('[ChatInterface] Failed to send message:', error)
       }
@@ -280,20 +208,20 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     }
 
     const handleEmojiSelect = async (emoji: string) => {
-      if (emojiPickerMessageId && chatAPI) {
-        await chatAPI.addReaction(emojiPickerMessageId, emoji)
+      if (emojiPickerMessageId && backendAdapter) {
+        await backendAdapter.addReaction(emojiPickerMessageId, emoji)
       }
       setShowEmojiPicker(false)
       setEmojiPickerMessageId(null)
     }
 
     const handleReactionClick = async (messageId: string, emoji: string, hasReacted: boolean) => {
-      if (!chatAPI) return
-      
-      if (hasReacted) {
-        await chatAPI.removeReaction(messageId, emoji)
-      } else {
-        await chatAPI.addReaction(messageId, emoji)
+      if (backendAdapter) {
+        if (hasReacted) {
+          await backendAdapter.removeReaction(messageId, emoji)
+        } else {
+          await backendAdapter.addReaction(messageId, emoji)
+        }
       }
     }
 

@@ -1,0 +1,4 @@
+{"ts":1749552921543,"type":"device_status","device":"alice","online":true}
+{"ts":1749552921549,"type":"device_status","device":"bob","online":true}
+{"ts":1749552921564,"type":"message","device":"alice","content":"Hello Bob!","source":"manual"}
+{"ts":1749552922075,"type":"message","device":"bob","content":"Hi Alice!","source":"manual"}

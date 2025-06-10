@@ -65,7 +65,14 @@ describe('Manual File Transfer - Alice to Bob E2E Test', () => {
     // Phase 5: Verify message appears in Alice's chat with attachment
     cy.log('Phase 5: Verifying message with attachment in Alice chat')
     cy.get('[data-testid="chat-alice"]').within(() => {
-      cy.contains('Alice to Bob: File transfer test', { timeout: 15000 }).should('be.visible')
+      // First ensure the message exists in the DOM
+      cy.contains('Alice to Bob: File transfer test', { timeout: 15000 }).should('exist')
+      
+      // Scroll to the message to make it visible
+      cy.contains('Alice to Bob: File transfer test').scrollIntoView()
+      
+      // Now check visibility
+      cy.contains('Alice to Bob: File transfer test').should('be.visible')
       
       // Verify attachment is present
       cy.contains('Alice to Bob: File transfer test').parent().parent().within(() => {
@@ -131,7 +138,7 @@ describe('Manual File Transfer - Alice to Bob E2E Test', () => {
     })
     cy.log(' Sync status shows successful synchronization')
     
-    cy.log('<‰ COMPLETE MANUAL FILE TRANSFER E2E TEST PASSED!')
+    cy.log('<ï¿½ COMPLETE MANUAL FILE TRANSFER E2E TEST PASSED!')
     cy.log(' Alice successfully sent a file to Bob through P2P sync')
     cy.log(' File attachments work end-to-end in the UI')
     cy.log(' Event timeline correctly shows file attachment indicators')
@@ -171,7 +178,9 @@ describe('Manual File Transfer - Alice to Bob E2E Test', () => {
     })
     
     cy.get('[data-testid="chat-alice"]').within(() => {
-      cy.contains('Multiple files test', { timeout: 15000 }).should('be.visible')
+      cy.contains('Multiple files test', { timeout: 15000 }).should('exist')
+      cy.contains('Multiple files test').scrollIntoView()
+      cy.contains('Multiple files test').should('be.visible')
       cy.get('.attachment').should('have.length', 2)
     })
     

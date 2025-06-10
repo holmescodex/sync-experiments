@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Frontend-Backend Integration Test</title>
+</head>
+<body>
+  <h1>Frontend-Backend Integration Test</h1>
+  <div id="status"></div>
+  <button onclick="sendMessage()">Send Test Message from Alice</button>
+  <div id="messages"></div>
+  
+  <script>
+    const statusDiv = document.getElementById('status');
+    const messagesDiv = document.getElementById('messages');
+    
+    async function checkBackends() {
+      try {
+        const aliceHealth = await fetch('http://localhost:3001/api/health').then(r => r.json());
+        const bobHealth = await fetch('http://localhost:3002/api/health').then(r => r.json());
+        
+        statusDiv.innerHTML = `
+          <p>Alice Backend: ${aliceHealth.status} (sync: ${aliceHealth.syncActive})</p>
+          <p>Bob Backend: ${bobHealth.status} (sync: ${bobHealth.syncActive})</p>
+        `;
+        
+        await loadMessages();
+      } catch (error) {
+        statusDiv.innerHTML = `<p style="color:red">Error: ${error.message}</p>`;
+      }
+    }
+    
+    async function sendMessage() {
+      try {
+        const response = await fetch('http://localhost:3001/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: 'Test from frontend: ' + new Date().toISOString() })
+        });
+        
+        if (response.ok) {
+          console.log('Message sent successfully');
+          setTimeout(loadMessages, 1000); // Reload after 1 second
+        }
+      } catch (error) {
+        console.error('Error sending message:', error);
+      }
+    }
+    
+    async function loadMessages() {
+      try {
+        const aliceMessages = await fetch('http://localhost:3001/api/messages').then(r => r.json());
+        const bobMessages = await fetch('http://localhost:3002/api/messages').then(r => r.json());
+        
+        messagesDiv.innerHTML = `
+          <h2>Alice Messages (${aliceMessages.messages.length})</h2>
+          <pre>${JSON.stringify(aliceMessages.messages, null, 2)}</pre>
+          <h2>Bob Messages (${bobMessages.messages.length})</h2>
+          <pre>${JSON.stringify(bobMessages.messages, null, 2)}</pre>
+        `;
+      } catch (error) {
+        messagesDiv.innerHTML = `<p style="color:red">Error loading messages: ${error.message}</p>`;
+      }
+    }
+    
+    // Check status on load and poll every 2 seconds
+    checkBackends();
+    setInterval(checkBackends, 2000);
+  </script>
+</body>
+</html>

@@ -1,10 +1,6 @@
-export interface Message {
-  id: string
-  author: string
-  content: string
-  timestamp: number
-  attachments: any[]
-}
+import type { BackendMessage } from '../types/message'
+
+export type Message = BackendMessage
 
 export class MessageAPI {
   constructor(private backendUrl: string) {}
@@ -48,5 +44,29 @@ export class MessageAPI {
     }
 
     return response.json()
+  }
+
+  async addReaction(messageId: string, emoji: string): Promise<void> {
+    const response = await fetch(`${this.backendUrl}/api/messages/${messageId}/reactions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ emoji })
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to add reaction: ${response.statusText}`)
+    }
+  }
+
+  async removeReaction(messageId: string, emoji: string): Promise<void> {
+    const response = await fetch(`${this.backendUrl}/api/messages/${messageId}/reactions/${emoji}`, {
+      method: 'DELETE'
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to remove reaction: ${response.statusText}`)
+    }
   }
 }

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Generate Test Images</title>
+</head>
+<body>
+    <h1>Test Image Generator</h1>
+    <div id="output"></div>
+    
+    <script>
+        function createTestImage(width, height, color, text, filename) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // Fill background
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, width, height);
+            
+            // Add text
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 48px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, width/2, height/2);
+            
+            // Convert to blob and download
+            canvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.textContent = `Download ${filename}`;
+                a.style.display = 'block';
+                a.style.margin = '10px';
+                document.getElementById('output').appendChild(a);
+                
+                // Auto-click to download
+                a.click();
+            }, 'image/jpeg', 0.8);
+        }
+        
+        // Create test images
+        createTestImage(800, 600, '#4682B4', 'Test Landscape', 'landscape.jpg');
+        createTestImage(400, 600, '#DC143C', 'Portrait Photo', 'portrait.jpg');
+        createTestImage(600, 400, '#4B0082', 'Abstract Art', 'abstract.jpg');
+        createTestImage(500, 300, '#323232', 'Technical Diagram', 'diagram.jpg');
+        createTestImage(300, 300, '#228B22', 'Small Image', 'small.jpg');
+    </script>
+</body>
+</html>
