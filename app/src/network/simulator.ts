@@ -89,9 +89,13 @@ export class NetworkSimulator {
 
     // Check if packet should be dropped
     if (Math.random() < this.config.packetLossRate) {
-      networkEvent.status = 'dropped'
-      this.notifyEventCallbacks(networkEvent)
-      return networkEvent
+      const droppedEvent: NetworkEvent = {
+        ...networkEvent,
+        status: 'dropped'
+      }
+      this.networkEvents.push(droppedEvent)
+      this.notifyEventCallbacks(droppedEvent)
+      return droppedEvent
     }
 
     // Calculate delivery time with latency and jitter
@@ -141,15 +145,23 @@ export class NetworkSimulator {
       // Check if target device is online
       const targetDevice = this.devices.get(event.targetDevice)
       if (!targetDevice || !targetDevice.isOnline) {
-        event.status = 'dropped'
-        this.notifyEventCallbacks(event)
+        const droppedEvent: NetworkEvent = {
+          ...event,
+          status: 'dropped'
+        }
+        this.networkEvents.push(droppedEvent)
+        this.notifyEventCallbacks(droppedEvent)
         continue
       }
 
-      // Deliver the event
-      event.status = 'delivered'
-      this.deliverEventToDevice(event)
-      this.notifyEventCallbacks(event)
+      // Create a separate delivered event to avoid mutating the sent event
+      const deliveredEvent: NetworkEvent = {
+        ...event,
+        status: 'delivered'
+      }
+      this.networkEvents.push(deliveredEvent)
+      this.deliverEventToDevice(deliveredEvent)
+      this.notifyEventCallbacks(deliveredEvent)
     }
   }
 
@@ -157,10 +169,12 @@ export class NetworkSimulator {
     const device = this.devices.get(networkEvent.targetDevice)
     if (!device) return
 
-    // Track received events for sync status
-    const eventKey = `${networkEvent.sourceDevice}-${networkEvent.payload.eventId || networkEvent.id}`
-    device.receivedEventIds.add(eventKey)
-    device.knownEventCount = device.receivedEventIds.size
+    // Only track actual message events with eventIds for sync status
+    if (networkEvent.type === 'message' && networkEvent.payload.eventId) {
+      const eventKey = `${networkEvent.sourceDevice}-${networkEvent.payload.eventId}`
+      device.receivedEventIds.add(eventKey)
+      device.knownEventCount = device.receivedEventIds.size
+    }
   }
 
   // Track when a device generates its own event
@@ -178,6 +192,15 @@ export class NetworkSimulator {
     }
   }
 
+  getCurrentTime(): number {
+    return this.currentTime
+  }
+
+  getTotalEventCount(): number {
+    return this.devices.size > 0 ? 
+      Math.max(...Array.from(this.devices.values()).map(d => d.totalEventCount)) : 0
+  }
+
   getDeviceSyncStatus(deviceId: string): { isSynced: boolean, syncPercentage: number } {
     const device = this.devices.get(deviceId)
     if (!device || device.totalEventCount === 0) {
@@ -188,6 +211,15 @@ export class NetworkSimulator {
     // This represents "what percentage of the total conversation does this device have?"
     const eventsThisDeviceHas = device.ownEventCount + device.knownEventCount
     const syncPercentage = Math.round((eventsThisDeviceHas / device.totalEventCount) * 100)
+    
+    // Debug logging to understand the calculation
+    console.log(`[DEBUG] ${deviceId} sync:`, {
+      ownEventCount: device.ownEventCount,
+      knownEventCount: device.knownEventCount,
+      totalEventCount: device.totalEventCount,
+      eventsThisDeviceHas,
+      syncPercentage
+    })
     
     // Device is synced if it has all events (own + all others)
     const expectedReceivedEvents = device.totalEventCount - device.ownEventCount
@@ -210,10 +242,22 @@ export class NetworkSimulator {
   }
 
   getNetworkStats() {
-    const total = this.networkEvents.length
-    const sent = this.networkEvents.filter(e => e.status === 'sent').length
-    const delivered = this.networkEvents.filter(e => e.status === 'delivered').length
-    const dropped = this.networkEvents.filter(e => e.status === 'dropped').length
+    // Group events by ID to get unique events and their final status
+    const eventsByID = new Map<string, NetworkEvent>()
+    
+    // Take the latest status for each event ID
+    for (const event of this.networkEvents) {
+      const existingEvent = eventsByID.get(event.id)
+      if (!existingEvent || event.timestamp >= existingEvent.timestamp) {
+        eventsByID.set(event.id, event)
+      }
+    }
+    
+    const uniqueEvents = Array.from(eventsByID.values())
+    const total = uniqueEvents.length
+    const sent = uniqueEvents.filter(e => e.status === 'sent').length
+    const delivered = uniqueEvents.filter(e => e.status === 'delivered').length
+    const dropped = uniqueEvents.filter(e => e.status === 'dropped').length
     
     return {
       total,

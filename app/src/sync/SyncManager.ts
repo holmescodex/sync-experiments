@@ -18,7 +18,7 @@ export class SyncManager {
   private deviceId = ''
   private network: NetworkSimulator | null = null
   private database: DeviceDB | null = null
-  private syncIntervalId: number | null = null
+  private syncIntervalId: NodeJS.Timeout | null = null
   
   constructor(
     deviceId: string,
@@ -55,7 +55,8 @@ export class SyncManager {
     // Initialize the new strategy
     if (this.network && this.database) {
       await this.currentStrategy.initialize(this.deviceId, this.network, this.database)
-      this.startSyncLoop()
+      // Don't start the real-time sync loop - let the simulation engine control sync timing
+      // this.startSyncLoop()
     }
   }
   
@@ -113,10 +114,26 @@ export class SyncManager {
   }
   
   /**
+   * Update local state (like Bloom filter) after new events are added
+   */
+  async updateLocalState(): Promise<void> {
+    if (this.currentStrategy) {
+      await this.currentStrategy.onSyncTick()
+    }
+  }
+  
+  /**
    * Get list of peer devices
    */
   getPeerDevices(): string[] {
     return this.currentStrategy?.getPeerDevices() || []
+  }
+  
+  /**
+   * Get the current strategy instance (for testing)
+   */
+  getStrategy(): SyncStrategy | null {
+    return this.currentStrategy
   }
   
   /**

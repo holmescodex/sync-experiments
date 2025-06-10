@@ -942,11 +942,1200 @@ describe('Phase 1 Integration', () => {
 - No performance metrics collection
 - No state export APIs
 
-#### Phase 2: Sync Protocol (Week 3-4)
-- Bloom filter implementation
-- UDP transport layer
-- Basic sync between 2 devices
-- Sync status visualization
+#### Phase 2: Bloom Filter Sync Protocol (Week 3-4) - Detailed Implementation Plan
+
+**Goal**: Implement the core P2P synchronization mechanism using Bloom filters over simulated UDP, building on Phase 1's networking foundation.
+
+**Core Concept**: Bloom filters advertise what each device HAS, not what they need. When Device A receives Device B's Bloom filter, A checks which of its own events are NOT in B's filter, and sends those events to B.
+
+##### Understanding Bloom Filter Sync
+
+**Key Principles**:
+1. Each device maintains a cumulative Bloom filter of ALL events it has ever seen
+2. Devices periodically broadcast their Bloom filter to peers (~500 bytes every 10 seconds)
+3. Recipients check their local events against the received filter
+4. Any local events that appear missing from the peer (test negative in their filter) are sent
+5. Over time, devices build increasingly accurate pictures of what each peer has
+
+**Critical UDP-Safe Design**:
+- **No send history tracking** - UDP delivery is unreliable, so we can't assume sent = received
+- **No duplicate suppression based on "already sent"** - instead rely purely on Bloom accuracy
+- **Prioritized scanning strategy** - scan recent events frequently, older events less often
+- **Convergence through repetition** - missed events caught in subsequent rounds
+
+**Why This Works**:
+- No explicit requests needed - the Bloom filter IS the implicit request
+- Privacy preserved - you can't enumerate what's in a Bloom filter
+- Tolerates false positives - worst case is we don't send something the peer needs
+- Self-healing - next round will catch anything missed
+- UDP-safe - no assumptions about packet delivery
+
+##### Bloom Filter Sync Protocol Flow
+
+```
+DEVICE A (has events 1,2,3)          DEVICE B (has events 3,4,5)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━         ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+State: Initial
+├─ Local events: [1,2,3]             ├─ Local events: [3,4,5]
+├─ Bloom(A): {1,2,3}                 ├─ Bloom(B): {3,4,5}
+└─ Peer states: empty                └─ Peer states: empty
+
+Round 1: A → B
+├─ A sends Bloom(A) to B ──────────→ B receives Bloom(A)
+│                                    ├─ B saves: PeerBloom[A] = {1,2,3}
+│                                    ├─ B checks its events against Bloom(A)
+│                                    ├─ Event 3: in Bloom(A) ✓ (skip)
+│                                    ├─ Event 4: not in Bloom(A) ✗ (send)
+│                                    └─ Event 5: not in Bloom(A) ✗ (send)
+│                                    
+└─ A waiting...          ←────────── B sends events [4,5] to A
+
+State after Round 1:
+├─ Local events: [1,2,3,4,5]         ├─ Local events: [3,4,5]
+├─ Bloom(A): {1,2,3,4,5} (updated)   ├─ Bloom(B): {3,4,5}
+└─ PeerBloom[B]: empty               └─ PeerBloom[A]: {1,2,3}
+
+Round 2: B → A  
+├─ B sends Bloom(B) to A ──────────→ A receives Bloom(B)
+├─ A saves: PeerBloom[B] = {3,4,5}   │
+├─ A checks its events:              │
+├─ Event 1: not in Bloom(B) ✗ (send) │
+├─ Event 2: not in Bloom(B) ✗ (send) │
+├─ Event 3: in Bloom(B) ✓ (skip)     │
+├─ Event 4: in Bloom(B) ✓ (skip)     │
+└─ Event 5: in Bloom(B) ✓ (skip)     │
+                                     │
+B receives events [1,2] ←──────────  └─ A sends events [1,2] to B
+
+Final State: Converged!
+├─ Local events: [1,2,3,4,5]         ├─ Local events: [1,2,3,4,5]
+├─ Bloom(A): {1,2,3,4,5}             ├─ Bloom(B): {1,2,3,4,5}
+└─ PeerBloom[B]: {3,4,5}             └─ PeerBloom[A]: {1,2,3,4,5}
+```
+
+##### Accumulating Peer Knowledge Over Time
+
+Each device maintains:
+1. **MyBloom**: A single Bloom filter containing ALL events I have
+2. **PeerBlooms[deviceId]**: Cumulative knowledge of what each peer has
+
+```typescript
+// Peer knowledge accumulation example
+class PeerKnowledge {
+  private peerFilters: Map<string, AccumulatingBloomFilter> = new Map()
+  
+  updatePeerKnowledge(peerId: string, receivedFilter: BloomFilter) {
+    if (!this.peerFilters.has(peerId)) {
+      this.peerFilters.set(peerId, new AccumulatingBloomFilter())
+    }
+    
+    // Merge new filter with accumulated knowledge
+    // Uses OR operation on bit arrays to accumulate
+    this.peerFilters.get(peerId)!.merge(receivedFilter)
+  }
+  
+  shouldSendEvent(peerId: string, eventId: string): boolean {
+    const peerFilter = this.peerFilters.get(peerId)
+    if (!peerFilter) return true // No knowledge = send everything
+    
+    // Only send if peer's filter says they DON'T have it
+    return !peerFilter.test(eventId)
+  }
+}
+```
+
+##### Scaling to Large Data (3GB) - UDP-Safe Approach
+
+**Challenge**: How to represent millions of events in ~500 byte Bloom filters?
+
+**Reality Check**: A 500-byte filter simply cannot accurately represent 6M events (3GB ÷ 500B chunks) at once. But that's okay!
+
+**UDP-Safe Solution**: Cumulative Peer Knowledge
+```
+Single Filter Per Peer:
+├─ Size: ~500 bytes (fixed, UDP-friendly)
+├─ Expected items: ~10K recent events  
+├─ False positive rate: ~1% (for recent events)
+└─ Sent every 10 seconds
+
+Key Insight: Accuracy comes from COMPOSITION over time, not larger filters
+```
+
+**How 500 Bytes Scales to 3GB**:
+
+1. **Each filter represents ~10K recent events accurately**
+2. **Over 100 sync rounds (16 minutes), we exchange 100 filters**  
+3. **Cumulative knowledge builds on receiver side**
+4. **Recent events get highest priority in scanning**
+5. **Older events covered via round-robin over many rounds**
+
+**Mathematics**:
+- 500 bytes = 4000 bits
+- For 10K items at 1% FPR: optimal
+- For 100K items: ~10% FPR (acceptable for older events)
+- For 1M+ items: High FPR, but round-robin scanning compensates
+
+**Trade-offs**:
+- ✅ UDP-safe packet sizes
+- ✅ Recent events (most important) get best accuracy
+- ✅ All events eventually covered via round-robin
+- ⚠️ Older events may take many rounds to sync
+- ⚠️ Some duplicate transmission due to false positives
+
+##### Multi-Round Bloom Filter Composition
+
+The key insight is that each individual Bloom filter provides partial information, but they compose on the receiver side to build increasingly accurate peer knowledge:
+
+```
+Round 1: Initial State
+ALICE                           BOB
+Events: [1,2,3,4,5]            Events: [3,4,5,6,7]
+Bloom(A): {1,2,3,4,5}          Bloom(B): {3,4,5,6,7}
+Knowledge of B: ∅              Knowledge of A: ∅
+
+Round 1: A → B
+Alice sends Bloom(A) ──────────→ Bob receives Bloom(A)
+                                Bob's PeerKnowledge[A] = {1,2,3,4,5}
+                                Bob checks: 6∉Bloom(A), 7∉Bloom(A)
+Bob sends [6,7] ←──────────────  Bob sends missing events
+
+Round 2: State After Bob's Send
+ALICE                           BOB  
+Events: [1,2,3,4,5,6,7]        Events: [3,4,5,6,7]
+Bloom(A): {1,2,3,4,5,6,7}      Bloom(B): {3,4,5,6,7}
+Knowledge of B: ∅              Knowledge of A: {1,2,3,4,5} (saved!)
+
+Round 2: B → A  
+Bob sends Bloom(B) ──────────→  Alice receives Bloom(B)
+                               Alice's PeerKnowledge[B] = {3,4,5,6,7}
+                               Alice checks: 1∉Bloom(B), 2∉Bloom(B)
+Alice sends [1,2] ←─────────── Alice sends missing events
+
+Round 3: Convergence Check
+ALICE                           BOB
+Events: [1,2,3,4,5,6,7]        Events: [1,2,3,4,5,6,7]  
+Bloom(A): {1,2,3,4,5,6,7}      Bloom(B): {1,2,3,4,5,6,7}
+Knowledge of B: {3,4,5,6,7}    Knowledge of A: {1,2,3,4,5,6,7}
+
+Round 3: A → B (Updated Knowledge)
+Alice sends Bloom(A) ──────────→ Bob receives Bloom(A)
+                                Bob merges: PeerKnowledge[A] |= {1,2,3,4,5,6,7}
+                                Bob checks against updated knowledge
+                                Bob finds: All events covered!
+No events sent ←─────────────── Bob sends nothing (fully synced)
+
+KEY INSIGHT: Bob's knowledge of Alice improved from {1,2,3,4,5} to {1,2,3,4,5,6,7}
+through accumulation, even though each individual Bloom filter was partial.
+```
+
+**Why This Works for Large Datasets**:
+
+1. **Compositional Accuracy**: Each round adds to peer knowledge
+2. **Recent Events Prioritized**: Most important data syncs first  
+3. **Round-Robin Coverage**: All events eventually scanned
+4. **UDP-Safe**: Every packet stays small and deliverable
+5. **Self-Healing**: Missed packets caught in subsequent rounds
+
+**Example with 100K Events**:
+- Round 1: Bloom covers events 90K-100K accurately (recent)
+- Round 2: Bloom covers events 90K-100K + some others (accumulated)  
+- Round 10: Peer knowledge covers 50K-100K with high accuracy
+- Round 50: Most events covered, round-robin filling gaps
+- Round 100: Near-complete knowledge, only edge cases missing
+
+##### Phase 2.1: Bloom Filter Implementation (Days 1-2)
+
+**Objective**: Create Bloom filters that scale from small to large datasets
+
+**Required Tests** (write first):
+```typescript
+// tests/sync/bloom-filter.test.ts
+describe('BloomFilter', () => {
+  test('creates UDP-safe filter with fixed 500-byte target', () => {
+    // Standard filter for ~10K recent events
+    const filter = BloomFilter.createOptimal(10000, 0.01)
+    expect(filter.sizeInBytes()).toBeLessThan(500)
+    expect(filter.sizeInBytes()).toBeGreaterThan(400) // Not too small
+  })
+  
+  test('maintains ALL events ever seen in cumulative filter', () => {
+    const bloom = new CumulativeBloomFilter()
+    
+    // Add many events over time
+    for (let i = 0; i < 50000; i++) {
+      bloom.add(`event-${i}`)
+    }
+    
+    // All should still be present (may have false positives, but no false negatives)
+    for (let i = 0; i < 50000; i++) {
+      expect(bloom.test(`event-${i}`)).toBe(true)
+    }
+  })
+  
+  test('composes peer knowledge over multiple rounds', () => {
+    const knowledge = new PeerKnowledge()
+    
+    // Round 1: Peer sends partial filter
+    const round1 = new BloomFilter(10000, 0.01)
+    round1.add('event-1')
+    round1.add('event-2')
+    knowledge.updatePeer('alice', round1)
+    
+    expect(knowledge.shouldSendEvent('alice', 'event-1')).toBe(false)
+    expect(knowledge.shouldSendEvent('alice', 'event-3')).toBe(true)
+    
+    // Round 2: Peer sends updated filter with more events
+    const round2 = new BloomFilter(10000, 0.01)
+    round2.add('event-1') // Still has old events
+    round2.add('event-2') 
+    round2.add('event-3') // Plus new events
+    round2.add('event-4')
+    knowledge.updatePeer('alice', round2)
+    
+    // Knowledge should be cumulative (union of both rounds)
+    expect(knowledge.shouldSendEvent('alice', 'event-1')).toBe(false)
+    expect(knowledge.shouldSendEvent('alice', 'event-2')).toBe(false)
+    expect(knowledge.shouldSendEvent('alice', 'event-3')).toBe(false)
+    expect(knowledge.shouldSendEvent('alice', 'event-4')).toBe(false)
+    expect(knowledge.shouldSendEvent('alice', 'event-5')).toBe(true)
+  })
+  
+  test('handles degraded accuracy for large datasets gracefully', () => {
+    const filter = new BloomFilter(10000, 0.01) // Optimized for 10K
+    
+    // Add way more events than optimal (100K events)
+    for (let i = 0; i < 100000; i++) {
+      filter.add(`event-${i}`)
+    }
+    
+    // Should still work, but with higher false positive rate
+    let falsePositives = 0
+    for (let i = 100000; i < 101000; i++) { // Test 1000 unknown events
+      if (filter.test(`unknown-${i}`)) {
+        falsePositives++
+      }
+    }
+    
+    const fpRate = falsePositives / 1000
+    expect(fpRate).toBeLessThan(0.5) // Should be <50% even when overloaded
+    expect(fpRate).toBeGreaterThan(0.05) // But higher than optimal 1%
+  })
+  
+  test('prioritized scanning focuses on recent events', () => {
+    const scanQueue = new EventScanQueue()
+    const now = Date.now()
+    
+    const events = [
+      { event_id: 'old-1', created_at: now - 300000 },    // 5 min ago
+      { event_id: 'old-2', created_at: now - 120000 },    // 2 min ago  
+      { event_id: 'recent-1', created_at: now - 30000 },  // 30 sec ago
+      { event_id: 'recent-2', created_at: now - 10000 },  // 10 sec ago
+    ]
+    
+    scanQueue.updateFromDatabase(events)
+    
+    // Mock peer filter that has old events but not recent ones
+    const peerFilter = new BloomFilter(1000, 0.01)
+    peerFilter.add('old-1')
+    peerFilter.add('old-2')
+    
+    const toSend = await scanQueue.getEventsToSend('peer', peerFilter, {
+      recentEventsBatch: 10,
+      olderEventsBatch: 2,
+      maxEventsPerRound: 5
+    })
+    
+    // Should prioritize recent events
+    expect(toSend.map(e => e.event_id)).toContain('recent-1')
+    expect(toSend.map(e => e.event_id)).toContain('recent-2')
+    expect(toSend.length).toBeLessThanOrEqual(5)
+  })
+})
+```
+
+**Implementation**:
+```typescript
+// src/sync/bloom-filter.ts
+export class BloomFilter {
+  private bits: Uint8Array
+  private bitSize: number
+  private hashCount: number
+  
+  constructor(expectedItems: number, falsePositiveRate: number) {
+    // Calculate optimal parameters
+    this.bitSize = Math.ceil(
+      -expectedItems * Math.log(falsePositiveRate) / (Math.log(2) ** 2)
+    )
+    this.hashCount = Math.ceil(
+      this.bitSize / expectedItems * Math.log(2)
+    )
+    this.bits = new Uint8Array(Math.ceil(this.bitSize / 8))
+  }
+  
+  static createOptimal(expectedItems: number, targetFPR: number): BloomFilter {
+    return new BloomFilter(expectedItems, targetFPR)
+  }
+  
+  add(item: string): void {
+    const hashes = this.getHashes(item)
+    for (const hash of hashes) {
+      const bitIndex = hash % this.bitSize
+      const byteIndex = Math.floor(bitIndex / 8)
+      const bitOffset = bitIndex % 8
+      this.bits[byteIndex] |= (1 << bitOffset)
+    }
+  }
+  
+  test(item: string): boolean {
+    const hashes = this.getHashes(item)
+    return hashes.every(hash => {
+      const bitIndex = hash % this.bitSize
+      const byteIndex = Math.floor(bitIndex / 8)
+      const bitOffset = bitIndex % 8
+      return (this.bits[byteIndex] & (1 << bitOffset)) !== 0
+    })
+  }
+  
+  // Merge two filters with OR operation
+  static merge(filter1: BloomFilter, filter2: BloomFilter): BloomFilter {
+    if (filter1.bitSize !== filter2.bitSize) {
+      throw new Error('Cannot merge filters of different sizes')
+    }
+    
+    const merged = new BloomFilter(0, 0) // Create empty
+    merged.bitSize = filter1.bitSize
+    merged.hashCount = filter1.hashCount
+    merged.bits = new Uint8Array(filter1.bits.length)
+    
+    // OR the bit arrays
+    for (let i = 0; i < filter1.bits.length; i++) {
+      merged.bits[i] = filter1.bits[i] | filter2.bits[i]
+    }
+    
+    return merged
+  }
+  
+  sizeInBytes(): number {
+    return this.bits.length
+  }
+  
+  serialize(): Uint8Array {
+    // Format: [version:1][bitSize:4][hashCount:1][bits:variable]
+    const result = new Uint8Array(6 + this.bits.length)
+    result[0] = 1 // version
+    new DataView(result.buffer).setUint32(1, this.bitSize, true)
+    result[5] = this.hashCount
+    result.set(this.bits, 6)
+    return result
+  }
+  
+  static deserialize(data: Uint8Array): BloomFilter {
+    const version = data[0]
+    if (version !== 1) throw new Error('Unsupported version')
+    
+    const bitSize = new DataView(data.buffer).getUint32(1, true)
+    const hashCount = data[5]
+    const bits = data.slice(6)
+    
+    const filter = new BloomFilter(0, 0) // Create empty
+    filter.bitSize = bitSize
+    filter.hashCount = hashCount
+    filter.bits = new Uint8Array(bits)
+    
+    return filter
+  }
+  
+  private getHashes(item: string): number[] {
+    // Use double hashing with SHA-256
+    const hash1 = this.hash(item + ':1')
+    const hash2 = this.hash(item + ':2')
+    
+    const hashes: number[] = []
+    for (let i = 0; i < this.hashCount; i++) {
+      hashes.push((hash1 + i * hash2) >>> 0) // Ensure positive
+    }
+    return hashes
+  }
+  
+  private hash(str: string): number {
+    // Simple hash for demo - in production use crypto.subtle
+    let hash = 0
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i)
+      hash = ((hash << 5) - hash) + char
+      hash = hash & hash // Convert to 32-bit integer
+    }
+    return Math.abs(hash)
+  }
+}
+
+// Cumulative filter that never forgets
+export class CumulativeBloomFilter {
+  private filters: BloomFilter[] = []
+  private currentFilter: BloomFilter
+  private eventCount = 0
+  
+  constructor() {
+    this.currentFilter = BloomFilter.createOptimal(10000, 0.01)
+    this.filters.push(this.currentFilter)
+  }
+  
+  add(eventId: string): void {
+    this.currentFilter.add(eventId)
+    this.eventCount++
+    
+    // Grow filter if getting full (estimated >80% capacity)
+    if (this.eventCount > this.filters.length * 8000) {
+      // Create new larger filter
+      const newSize = this.filters.length * 10000 * 10
+      this.currentFilter = BloomFilter.createOptimal(newSize, 0.01)
+      this.filters.push(this.currentFilter)
+    }
+  }
+  
+  test(eventId: string): boolean {
+    // Check all historical filters
+    return this.filters.some(filter => filter.test(eventId))
+  }
+  
+  // Get appropriate filter for wire transmission
+  getFilterForTransmission(level: 'recent' | 'medium' | 'full'): BloomFilter {
+    switch(level) {
+      case 'recent':
+        return this.filters[this.filters.length - 1] // Most recent
+      case 'medium':
+        // Merge last few filters
+        if (this.filters.length <= 3) return this.getMergedFilter()
+        return this.filters.slice(-3).reduce(BloomFilter.merge)
+      case 'full':
+        return this.getMergedFilter() // All filters merged
+    }
+  }
+  
+  private getMergedFilter(): BloomFilter {
+    return this.filters.reduce(BloomFilter.merge)
+  }
+}
+
+// Tracks what we know about each peer
+export class PeerKnowledge {
+  private peerFilters: Map<string, CumulativeBloomFilter> = new Map()
+  
+  updatePeer(peerId: string, receivedFilter: BloomFilter): void {
+    if (!this.peerFilters.has(peerId)) {
+      this.peerFilters.set(peerId, new CumulativeBloomFilter())
+    }
+    
+    // Add all bits from received filter to our knowledge
+    // In practice, we'd merge the bit arrays directly
+    // This is simplified for clarity
+  }
+  
+  shouldSendEvent(peerId: string, eventId: string): boolean {
+    const peerFilter = this.peerFilters.get(peerId)
+    if (!peerFilter) return true // No knowledge = send everything
+    
+    // Only send if peer's filter says they DON'T have it
+    return !peerFilter.test(eventId)
+  }
+  
+  getPeerSyncEstimate(peerId: string, totalEvents: number): number {
+    // Estimate based on filter density
+    // This is approximate but useful for UI
+    return 0 // TODO: Implement density estimation
+  }
+}
+```
+
+##### Phase 2.2: Sync Protocol Engine (Days 3-4)
+
+**Objective**: Implement the protocol that uses Bloom filters to achieve eventual consistency
+
+**Required Tests**:
+```typescript
+// tests/sync/protocol.test.ts
+describe('SyncProtocol', () => {
+  test('sends bloom filter to peers', async () => {
+    const deviceA = new SyncProtocol('alice', networkSimulator, dbAlice)
+    
+    // Add some events to A
+    await dbAlice.insertEvent(createTestEvent('event-1'))
+    await dbAlice.insertEvent(createTestEvent('event-2'))
+    deviceA.updateLocalBloom()
+    
+    // Send bloom filter
+    await deviceA.sendBloomFilter('bob')
+    
+    const networkEvents = networkSimulator.getNetworkEvents()
+    const bloomEvent = networkEvents.find(e => 
+      e.type === 'bloom_filter' && e.sourceDevice === 'alice'
+    )
+    
+    expect(bloomEvent).toBeDefined()
+    expect(bloomEvent.payload.filterType).toBe('recent')
+    expect(bloomEvent.payload.eventCount).toBe(2)
+  })
+  
+  test('responds to bloom filter by sending missing events', async () => {
+    const deviceA = new SyncProtocol('alice', networkSimulator, dbAlice)
+    const deviceB = new SyncProtocol('bob', networkSimulator, dbBob)
+    
+    // A has events 1,2,3
+    await dbAlice.insertEvent(createTestEvent('event-1'))
+    await dbAlice.insertEvent(createTestEvent('event-2'))
+    await dbAlice.insertEvent(createTestEvent('event-3'))
+    deviceA.updateLocalBloom()
+    
+    // B has events 2,3,4
+    await dbBob.insertEvent(createTestEvent('event-2'))
+    await dbBob.insertEvent(createTestEvent('event-3'))
+    await dbBob.insertEvent(createTestEvent('event-4'))
+    deviceB.updateLocalBloom()
+    
+    // A sends bloom to B
+    await deviceA.sendBloomFilter('bob')
+    await networkSimulator.tick(100)
+    
+    // B should send event-4 to A (not in A's bloom)
+    const eventTransfers = networkSimulator.getNetworkEvents()
+      .filter(e => e.type === 'message' && e.sourceDevice === 'bob')
+    
+    expect(eventTransfers.length).toBe(1)
+    expect(eventTransfers[0].payload.eventId).toBe('event-4')
+  })
+  
+  test('accumulates peer knowledge over multiple rounds', async () => {
+    const deviceA = new SyncProtocol('alice', networkSimulator, dbAlice)
+    const deviceB = new SyncProtocol('bob', networkSimulator, dbBob)
+    
+    // Round 1: B has event-1
+    await dbBob.insertEvent(createTestEvent('event-1'))
+    deviceB.updateLocalBloom()
+    await deviceB.sendBloomFilter('alice')
+    await networkSimulator.tick(100)
+    
+    // A should know B has event-1
+    expect(deviceA.peerHasEvent('bob', 'event-1')).toBe(true)
+    
+    // Round 2: B gets event-2
+    await dbBob.insertEvent(createTestEvent('event-2'))
+    deviceB.updateLocalBloom()
+    await deviceB.sendBloomFilter('alice')
+    await networkSimulator.tick(100)
+    
+    // A should know B has both events
+    expect(deviceA.peerHasEvent('bob', 'event-1')).toBe(true)
+    expect(deviceA.peerHasEvent('bob', 'event-2')).toBe(true)
+  })
+  
+  test('achieves convergence through bloom sync', async () => {
+    const deviceA = new SyncProtocol('alice', networkSimulator, dbAlice)
+    const deviceB = new SyncProtocol('bob', networkSimulator, dbBob)
+    
+    // A has events 1,2,3
+    for (let i = 1; i <= 3; i++) {
+      await dbAlice.insertEvent(createTestEvent(`event-${i}`))
+    }
+    
+    // B has events 3,4,5
+    for (let i = 3; i <= 5; i++) {
+      await dbBob.insertEvent(createTestEvent(`event-${i}`))
+    }
+    
+    // Run sync rounds
+    for (let round = 0; round < 5; round++) {
+      deviceA.updateLocalBloom()
+      deviceB.updateLocalBloom()
+      
+      await deviceA.sendBloomFilter('bob')
+      await deviceB.sendBloomFilter('alice')
+      await networkSimulator.tick(200)
+    }
+    
+    // Both should have all 5 events
+    const eventsA = await dbAlice.getAllEvents()
+    const eventsB = await dbBob.getAllEvents()
+    
+    expect(eventsA.length).toBe(5)
+    expect(eventsB.length).toBe(5)
+  })
+  
+  test('handles large datasets with graceful degradation', async () => {
+    const deviceA = new SyncProtocol('alice', networkSimulator, dbAlice)
+    const deviceB = new SyncProtocol('bob', networkSimulator, dbBob)
+    
+    // Add many events to test scaling
+    for (let i = 0; i < 25000; i++) {
+      await dbAlice.insertEvent(createTestEvent(`event-${i}`))
+    }
+    deviceA.updateLocalBloom()
+    
+    // Single 500-byte filter should handle large dataset
+    await deviceA.sendBloomFilter('bob')
+    const sent = networkSimulator.getNetworkEvents().slice(-1)[0]
+    expect(sent.payload.filterSize).toBeLessThan(500)
+    
+    // Should still trigger event transmission despite imperfect accuracy
+    await networkSimulator.tick(100)
+    const eventTransfers = networkSimulator.getNetworkEvents()
+      .filter(e => e.type === 'message' && e.sourceDevice === 'alice')
+    
+    // With degraded accuracy, should still send some events
+    expect(eventTransfers.length).toBeGreaterThan(0)
+    expect(eventTransfers.length).toBeLessThan(500) // But not everything due to FP
+  })
+  
+  test('composes knowledge over multiple sync rounds', async () => {
+    const deviceA = new SyncProtocol('alice', networkSimulator, dbAlice)
+    const deviceB = new SyncProtocol('bob', networkSimulator, dbBob)
+    
+    // A has some events, B has others
+    for (let i = 0; i < 100; i++) {
+      if (i < 60) await dbAlice.insertEvent(createTestEvent(`event-${i}`))
+      if (i >= 40) await dbBob.insertEvent(createTestEvent(`event-${i}`))
+    }
+    
+    // Run multiple sync rounds
+    for (let round = 0; round < 10; round++) {
+      deviceA.updateLocalBloom()
+      deviceB.updateLocalBloom()
+      
+      await deviceA.sendBloomFilter('bob')
+      await deviceB.sendBloomFilter('alice')
+      await networkSimulator.tick(100)
+    }
+    
+    // After multiple rounds, should achieve convergence
+    const eventsA = await dbAlice.getAllEvents()
+    const eventsB = await dbBob.getAllEvents()
+    
+    // Should be much closer to full convergence
+    expect(Math.abs(eventsA.length - eventsB.length)).toBeLessThan(10)
+  })
+})
+```
+
+**Implementation**:
+```typescript
+// src/sync/protocol.ts
+export class SyncProtocol {
+  private myBloom: CumulativeBloomFilter
+  private peerKnowledge: PeerKnowledge
+  private lastSyncTimes: Map<string, { recent: number, medium: number, full: number }>
+  private scanQueue: EventScanQueue // Prioritized queue for efficient scanning
+  
+  constructor(
+    private deviceId: string,
+    private network: NetworkSimulator,
+    private database: DeviceDB
+  ) {
+    this.myBloom = new CumulativeBloomFilter()
+    this.peerKnowledge = new PeerKnowledge()
+    this.lastSyncTimes = new Map()
+    this.scanQueue = new EventScanQueue()
+    this.setupNetworkHandlers()
+  }
+  
+  async updateLocalBloom(): Promise<void> {
+    // Add all local events to bloom filter
+    const events = await this.database.getAllEvents()
+    for (const event of events) {
+      this.myBloom.add(event.event_id)
+    }
+    
+    // Update scan queue with new events
+    this.scanQueue.updateFromDatabase(events)
+  }
+  
+  async sendBloomFilter(targetDevice: string, filterType: 'recent' | 'medium' | 'full' = 'recent'): Promise<void> {
+    const filter = this.myBloom.getFilterForTransmission(filterType)
+    const serialized = filter.serialize()
+    
+    this.network.sendEvent(this.deviceId, targetDevice, 'bloom_filter', {
+      filter: Array.from(serialized), // Convert for network
+      filterType,
+      filterSize: serialized.length,
+      eventCount: await this.database.getEventCount(),
+      timestamp: this.network.getCurrentTime()
+    })
+    
+    // Update last sync time
+    if (!this.lastSyncTimes.has(targetDevice)) {
+      this.lastSyncTimes.set(targetDevice, { recent: 0, medium: 0, full: 0 })
+    }
+    this.lastSyncTimes.get(targetDevice)![filterType] = this.network.getCurrentTime()
+  }
+  
+  private setupNetworkHandlers(): void {
+    this.network.onNetworkEvent(async (event) => {
+      if (event.targetDevice !== this.deviceId) return
+      if (event.status !== 'delivered') return
+      
+      switch (event.type) {
+        case 'bloom_filter':
+          await this.handleBloomFilter(event)
+          break
+        case 'message':
+          // Store received events
+          if (event.payload.encrypted) {
+            await this.handleReceivedEvent(event)
+          }
+          break
+      }
+    })
+  }
+  
+  private async handleBloomFilter(event: NetworkEvent): Promise<void> {
+    const peerFilter = BloomFilter.deserialize(new Uint8Array(event.payload.filter))
+    const peerId = event.sourceDevice
+    
+    // Update our knowledge of what peer has
+    this.peerKnowledge.updatePeer(peerId, peerFilter)
+    
+    // Use prioritized scanning instead of full scan
+    // Recent events first, then older events
+    const eventsToSend = await this.scanQueue.getEventsToSend(peerId, peerFilter, {
+      recentEventsBatch: 50,     // Check last 50 events first
+      olderEventsBatch: 10,      // Then check 10 older events  
+      maxEventsPerRound: 20      // Don't overwhelm UDP
+    })
+    
+    // Send missing events (UDP-sized batches)
+    for (const event of eventsToSend) {
+      this.network.sendEvent(this.deviceId, peerId, 'message', {
+        eventId: event.event_id,
+        encrypted: Array.from(event.encrypted),
+        createdAt: event.created_at,
+        deviceId: event.device_id
+      })
+      
+      // Small delay to avoid UDP flooding
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+  }
+  
+  private async handleReceivedEvent(networkEvent: NetworkEvent): Promise<void> {
+    const eventData = networkEvent.payload
+    
+    // Check if we already have this event
+    const eventId = await this.database.computeEventId(new Uint8Array(eventData.encrypted))
+    const existing = await this.database.getEvent(eventId)
+    
+    if (!existing) {
+      // Store new event
+      await this.database.insertEvent({
+        device_id: eventData.deviceId,
+        created_at: eventData.createdAt,
+        received_at: this.network.getCurrentTime(),
+        encrypted: new Uint8Array(eventData.encrypted)
+      })
+      
+      // Update our bloom filter
+      this.myBloom.add(eventId)
+    }
+  }
+  
+  peerHasEvent(peerId: string, eventId: string): boolean {
+    // Check our accumulated knowledge of peer
+    return !this.peerKnowledge.shouldSendEvent(peerId, eventId)
+  }
+  
+  // Determine which bloom filter level to send based on time
+  shouldSendBloomLevel(peerId: string): 'recent' | 'medium' | 'full' | null {
+    const now = this.network.getCurrentTime()
+    const lastSync = this.lastSyncTimes.get(peerId) || { recent: 0, medium: 0, full: 0 }
+    
+    // Send different levels at different frequencies
+    if (now - lastSync.full > 600000) return 'full'      // Every 10 min
+    if (now - lastSync.medium > 60000) return 'medium'   // Every 1 min
+    if (now - lastSync.recent > 10000) return 'recent'   // Every 10 sec
+    
+    return null
+  }
+  
+  getSyncStatus(): { syncPercentage: number, knownEvents: number, totalEvents: number } {
+    // This would be calculated based on network-wide knowledge
+    // For now, simplified
+    return {
+      syncPercentage: 100,
+      knownEvents: this.myBloom.getEventCount(),
+      totalEvents: this.network.getTotalEventCount()
+    }
+  }
+}
+
+// Prioritized event scanning for UDP-safe sync
+class EventScanQueue {
+  private recentEvents: Event[] = []
+  private olderEventsCursor = 0
+  private lastUpdateTime = 0
+  
+  updateFromDatabase(events: Event[]): void {
+    const now = Date.now()
+    
+    // Recent events = last 1 minute, scanned every round
+    this.recentEvents = events.filter(e => 
+      (now - e.created_at) < 60000
+    ).sort((a, b) => b.created_at - a.created_at) // Newest first
+    
+    this.lastUpdateTime = now
+  }
+  
+  async getEventsToSend(
+    peerId: string, 
+    peerFilter: BloomFilter,
+    options: {
+      recentEventsBatch: number
+      olderEventsBatch: number  
+      maxEventsPerRound: number
+    }
+  ): Promise<Event[]> {
+    const eventsToSend: Event[] = []
+    
+    // 1. Always check recent events first
+    for (const event of this.recentEvents.slice(0, options.recentEventsBatch)) {
+      if (!peerFilter.test(event.event_id)) {
+        eventsToSend.push(event)
+        if (eventsToSend.length >= options.maxEventsPerRound) break
+      }
+    }
+    
+    // 2. Round-robin through older events if we have room
+    if (eventsToSend.length < options.maxEventsPerRound) {
+      const allEvents = await this.database.getAllEvents()
+      const olderEvents = allEvents.filter(e => !this.recentEvents.includes(e))
+      
+      // Continue from where we left off last time
+      for (let i = 0; i < options.olderEventsBatch && eventsToSend.length < options.maxEventsPerRound; i++) {
+        const index = (this.olderEventsCursor + i) % olderEvents.length
+        const event = olderEvents[index]
+        
+        if (event && !peerFilter.test(event.event_id)) {
+          eventsToSend.push(event)
+        }
+      }
+      
+      // Advance cursor for next round
+      this.olderEventsCursor = (this.olderEventsCursor + options.olderEventsBatch) % olderEvents.length
+    }
+    
+    return eventsToSend
+  }
+}
+```
+
+##### Phase 2.3: Integration with Existing Systems (Day 5)
+
+**Objective**: Connect sync protocol to Phase 1's simulation engine and UI
+
+**Required Changes**:
+```typescript
+// src/simulation/engine.ts - Enhanced for Bloom sync
+export class SimulationEngine {
+  private syncProtocols: Map<string, SyncProtocol> = new Map()
+  private syncIntervalId: number | null = null
+  
+  async initializeSync(): Promise<void> {
+    // Create sync protocols for each device
+    for (const deviceId of ['alice', 'bob']) {
+      const protocol = new SyncProtocol(
+        deviceId, 
+        this.networkSimulator,
+        this.deviceDatabases.get(deviceId)!
+      )
+      this.syncProtocols.set(deviceId, protocol)
+    }
+    
+    // Start periodic sync
+    this.startPeriodicSync()
+  }
+  
+  private startPeriodicSync(): void {
+    // Check every second for sync opportunities
+    this.syncIntervalId = setInterval(async () => {
+      if (!this.isRunning) return
+      
+      for (const [deviceId, protocol] of this.syncProtocols) {
+        // Update local bloom with any new events
+        await protocol.updateLocalBloom()
+        
+        // Check which peers need which level of sync
+        const peers = Array.from(this.syncProtocols.keys()).filter(id => id !== deviceId)
+        
+        for (const peerId of peers) {
+          const level = protocol.shouldSendBloomLevel(peerId)
+          if (level) {
+            await protocol.sendBloomFilter(peerId, level)
+          }
+        }
+      }
+    }, 1000) // Check every second
+  }
+  
+  onEventExecute(event: SimulationEvent): void {
+    super.onEventExecute(event)
+    
+    // When a device creates a new event, update its bloom
+    if (event.type === 'message') {
+      const protocol = this.syncProtocols.get(event.deviceId)
+      if (protocol) {
+        // The bloom will be updated on next sync cycle
+        this.networkSimulator.updateTotalEventCount(this.getTotalEventCount())
+      }
+    }
+  }
+  
+  getDeviceSyncStatus(): Map<string, SyncStatus> {
+    const status = new Map()
+    const totalEvents = this.getTotalEventCount()
+    
+    for (const [deviceId, db] of this.deviceDatabases) {
+      const eventCount = db.getEventCount()
+      const syncPercentage = totalEvents > 0 ? (eventCount / totalEvents) * 100 : 100
+      
+      status.set(deviceId, {
+        isSynced: syncPercentage >= 95,
+        syncPercentage,
+        knownEvents: eventCount,
+        totalEvents
+      })
+    }
+    
+    return status
+  }
+  
+  shutdown(): void {
+    if (this.syncIntervalId) {
+      clearInterval(this.syncIntervalId)
+    }
+    super.shutdown()
+  }
+}
+```
+
+##### Phase 2.4: Enhanced Network Event Visualization (Day 6)
+
+**Objective**: Update the network event log to show Bloom sync activity
+
+**Enhanced Network Event Types**:
+- `bloom_filter`: Filter advertisement (includes size, type, event count)
+- `message`: Event transmission triggered by Bloom sync
+- `sync_stats`: Periodic sync status updates
+
+**Updated NetworkEventLog Component**:
+```typescript
+// Enhanced to show Bloom filter details
+const BloomFilterEventDisplay = ({ event }: { event: NetworkEvent }) => {
+  const { filterType, filterSize, eventCount } = event.payload
+  
+  return (
+    <div className="bloom-event">
+      <div className="event-header">
+        <span className="bloom-icon">🌸</span>
+        <span className="event-title">Bloom Filter ({filterType})</span>
+        <span className="event-meta">{filterSize} bytes</span>
+      </div>
+      <div className="event-details">
+        Advertising {eventCount} events to {event.targetDevice}
+      </div>
+    </div>
+  )
+}
+```
+
+**Enhanced Chat Interface Sync Indicators**:
+```typescript
+// src/components/ChatInterface.tsx - Enhanced sync display
+const SyncStatusDisplay = ({ syncStatus }: { syncStatus: SyncStatus }) => {
+  const getStatusColor = () => {
+    if (syncStatus.syncPercentage >= 95) return '#28a745' // Green
+    if (syncStatus.syncPercentage >= 80) return '#ffc107' // Yellow  
+    return '#dc3545' // Red
+  }
+  
+  return (
+    <div className="sync-status-enhanced">
+      <div className="sync-indicator">
+        <div 
+          className="sync-dot" 
+          style={{ backgroundColor: getStatusColor() }}
+        />
+        <span className="sync-label">
+          {syncStatus.isSynced ? 'Synced' : 'Syncing'} 
+          ({syncStatus.syncPercentage.toFixed(1)}%)
+        </span>
+      </div>
+      <div className="sync-details">
+        {syncStatus.knownEvents} / {syncStatus.totalEvents} events
+      </div>
+    </div>
+  )
+}
+```
+
+##### Phase 2.5: Demo Scenarios & Testing (Day 7)
+
+**Built-in Bloom Sync Scenarios**:
+
+1. **Perfect Sync**: 
+   - Network: 0% loss, 10ms latency
+   - Events: Steady 1 msg/min from each device
+   - Expected: >99% sync within 30 seconds
+   
+2. **Lossy Network**:
+   - Network: 20% packet loss, 100ms latency
+   - Events: 2 msgs/min mixed between devices
+   - Expected: >90% sync, visible retries
+   
+3. **Burst & Catch-up**:
+   - Scenario: Alice sends 10 messages quickly, then stops
+   - Network: 5% loss, 50ms latency
+   - Expected: Bob catches up via Bloom sync within 60s
+   
+4. **Large Dataset**:
+   - Pre-populate: 500 events split randomly
+   - Network: 1% loss, realistic conditions
+   - Expected: Full convergence, efficient bandwidth usage
+   
+5. **Hierarchical Filters**:
+   - Long-running: 1000+ events over time
+   - Observe: Recent/Medium/Full filter transmissions
+   - Verify: Filter sizes stay within bounds
+
+**Integration Test Framework**:
+```typescript
+// tests/scenarios/bloom-sync-scenarios.test.ts
+class BloomSyncScenario {
+  constructor(
+    private devices: string[],
+    private networkConfig: NetworkConfig,
+    private eventConfig: EventConfig
+  ) {}
+  
+  async run(durationMs: number): Promise<SyncResults> {
+    // Setup devices with databases
+    // Run simulation with Bloom sync enabled
+    // Collect metrics throughout
+    // Return convergence analysis
+  }
+  
+  getMetrics(): BloomSyncMetrics {
+    return {
+      convergenceTime: number,
+      finalSyncPercentage: number,
+      bloomFiltersSent: number,
+      averageFilterSize: number,
+      falsePositiveRate: number,
+      bandwidthEfficiency: number,
+      duplicateEvents: number
+    }
+  }
+}
+```
+
+**Performance Validation**:
+- Two devices converge in <60s under ideal conditions
+- 90%+ sync achieved with 20% packet loss
+- Bloom filters stay under size limits (2KB/200KB/2MB)
+- False positive rate <5% for large datasets
+- No duplicate events in final databases
+- Bandwidth usage <5x raw message data
+
+##### Phase 2.6: Success Criteria & Next Steps
+
+##### Modular Sync Strategy Design
+
+**Important**: This Bloom filter approach is Strategy #1. The simulation should support pluggable sync strategies to enable experimentation and comparison.
+
+**Sync Strategy Interface**:
+```typescript
+interface SyncStrategy {
+  name: string
+  description: string
+  
+  // Initialize strategy for a device
+  initialize(deviceId: string, network: NetworkSimulator, database: DeviceDB): void
+  
+  // Handle incoming network events
+  handleNetworkEvent(event: NetworkEvent): Promise<void>
+  
+  // Periodic sync opportunity (called every second)
+  onSyncTick(): Promise<void>
+  
+  // Get sync status for UI
+  getSyncStatus(): SyncStatus
+  
+  // Cleanup
+  shutdown(): void
+}
+```
+
+**Planned Strategies**:
+1. **Bloom Filter Sync** (Phase 2) - Compositional accuracy via small filters
+2. **Gossip Sync** (Future) - Epidemic-style random peer selection
+3. **Want-List Sync** (Future) - Explicit missing event requests
+4. **Hybrid Sync** (Future) - Bloom + occasional want-lists for critical events
+
+**Implementation Structure**:
+```
+src/sync/
+├── strategies/
+│   ├── BloomFilterStrategy.ts
+│   ├── GossipStrategy.ts (future)
+│   └── WantListStrategy.ts (future)
+├── SyncStrategy.interface.ts
+└── SyncManager.ts (orchestrates strategy switching)
+```
+
+This modularity enables A/B testing of sync approaches within the same simulation environment.
+
+**Phase 2 Completion Criteria**:
+- [ ] Modular SyncStrategy interface implemented
+- [ ] BloomFilterStrategy as first concrete implementation
+- [ ] CumulativeBloomFilter handles 50K+ events with graceful degradation
+- [ ] PeerKnowledge accumulates accurately over multiple rounds
+- [ ] SyncProtocol achieves convergence between Alice & Bob via composition
+- [ ] Fixed 500-byte filters maintain UDP compatibility
+- [ ] Prioritized scanning focuses on recent events first
+- [ ] Round-robin scanning ensures older events eventually covered
+- [ ] Network event log shows Bloom filter activity
+- [ ] Sync status displays real progress in chat interfaces
+- [ ] Multi-round convergence scenarios pass
+- [ ] False positive rates degrade gracefully with large datasets
+- [ ] No assumptions about UDP packet delivery
+- [ ] Easy to swap sync strategies in simulation
+
+**Key Learnings for Phase 3**:
+- How false positive rates affect sync efficiency
+- Optimal timing for different filter levels
+- Bandwidth vs. convergence time trade-offs
+- Impact of packet loss on Bloom sync reliability
+
+**Phase 2 Deliverables**:
+1. Complete Bloom filter implementation with optimal sizing
+2. Peer-to-peer sync protocol using filter advertisements
+3. Cumulative peer knowledge that improves over time
+4. Hierarchical filter system for large datasets
+5. Enhanced UI showing sync progress and filter activity
+6. Comprehensive test suite validating sync behavior
+7. Demo scenarios showcasing different network conditions
+
+**Architecture Summary**:
+```
+┌─────────────────┐    ┌─────────────────┐
+│ Device A        │    │ Device B        │
+├─ SQLite DB     │    ├─ SQLite DB     │
+├─ Cumulative    │    ├─ Cumulative    │
+│  BloomFilter    │◄──►│  BloomFilter    │
+├─ PeerKnowledge │    ├─ PeerKnowledge │
+└─ SyncProtocol  │    └─ SyncProtocol  │
+     │                       │
+     └───── Network Sim ─────┘
+            (UDP packets)
+```
+
+This establishes the foundation for multi-device sync in Phase 3, where we'll extend from 2 to N devices and add more sophisticated network topologies.
 
 #### Phase 3: Rich Dashboard (Week 5-6)
 - Full UI with all controls

@@ -9,6 +9,10 @@ interface EventLogWithControlsProps {
   onUpdateFrequencies: (frequencies: DeviceFrequency[]) => void
   isRunning: boolean
   speedMultiplier: number
+  globalMessagesPerHour: number
+  onUpdateGlobalMessagesPerHour: (rate: number) => void
+  imageAttachmentPercentage: number
+  onUpdateImagePercentage: (percentage: number) => void
   onPause: () => void
   onResume: () => void
   onSetSpeed: (speed: number) => void
@@ -23,6 +27,10 @@ export function EventLogWithControls({
   onUpdateFrequencies,
   isRunning,
   speedMultiplier,
+  globalMessagesPerHour,
+  onUpdateGlobalMessagesPerHour,
+  imageAttachmentPercentage,
+  onUpdateImagePercentage,
   onPause,
   onResume,
   onSetSpeed,
@@ -95,10 +103,49 @@ export function EventLogWithControls({
       </div>
       
       <div className="generation-controls">
-        <div className="control-row">
-          {frequencies.map(freq => (
-            <div key={freq.deviceId} className="device-control">
-              <label className="device-toggle">
+        <div className="controls-header">
+          <h4>Message Generation</h4>
+        </div>
+        
+        <div className="global-controls">
+          <div className="control-group">
+            <label className="control-label">Global Rate</label>
+            <div className="control-input-group">
+              <input
+                type="number"
+                min="0"
+                max="3600"
+                value={globalMessagesPerHour}
+                onChange={(e) => onUpdateGlobalMessagesPerHour(Number(e.target.value))}
+                className="control-input"
+              />
+              <span className="control-unit">msg/hr</span>
+            </div>
+          </div>
+          
+          <div className="control-group">
+            <label className="control-label">Images</label>
+            <div className="control-input-group">
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={imageAttachmentPercentage}
+                onChange={(e) => onUpdateImagePercentage(Number(e.target.value))}
+                className="control-input"
+              />
+              <span className="control-unit">%</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="device-controls">
+          <div className="controls-subheader">
+            <span>Device Enable/Disable</span>
+          </div>
+          <div className="device-toggles">
+            {frequencies.map(freq => (
+              <label key={freq.deviceId} className="device-toggle">
                 <input
                   type="checkbox"
                   checked={freq.enabled}
@@ -108,20 +155,8 @@ export function EventLogWithControls({
                   {freq.deviceId}
                 </span>
               </label>
-              <div className="frequency-control">
-                <input
-                  type="number"
-                  min="0"
-                  max="3600"
-                  value={freq.messagesPerHour}
-                  onChange={(e) => handleFrequencyChange(freq.deviceId, Number(e.target.value))}
-                  disabled={!freq.enabled}
-                  className="freq-input"
-                />
-                <span className="freq-unit">msg/hr</span>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
 

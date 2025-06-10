@@ -30,7 +30,10 @@ describe('DeviceDB', () => {
     const eventId = await db.insertEvent(event) // Returns computed hash
     const retrieved = await db.getEvent(eventId)
     
-    expect(retrieved).toEqual(event)
+    expect(retrieved).toEqual({
+      ...event,
+      event_id: eventId
+    })
   })
   
   test('returns events in chronological order', async () => {
@@ -69,6 +72,10 @@ describe('DeviceDB', () => {
     expect(events[0].created_at).toBe(1000)
     expect(events[1].created_at).toBe(2000)
     expect(events[2].created_at).toBe(3000)
+    // Verify event_id is included
+    expect(events[0].event_id).toBeDefined()
+    expect(events[1].event_id).toBeDefined()
+    expect(events[2].event_id).toBeDefined()
   })
   
   test('handles database isolation between devices', async () => {
@@ -94,6 +101,8 @@ describe('DeviceDB', () => {
     expect(eventsBob).toHaveLength(1)
     expect(eventsAlice[0].device_id).toBe('alice')
     expect(eventsBob[0].device_id).toBe('bob')
+    expect(eventsAlice[0].event_id).toBeDefined()
+    expect(eventsBob[0].event_id).toBeDefined()
   })
   
   test('computes consistent event IDs from encrypted content', async () => {

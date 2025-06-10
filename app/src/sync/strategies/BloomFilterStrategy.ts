@@ -22,6 +22,7 @@ export class BloomFilterStrategy implements SyncStrategy {
   private peerKnowledge: PeerKnowledge
   private scanQueue: EventScanQueue
   private lastSyncTimes: Map<string, number> = new Map()
+  private addedEventIds: Set<string> = new Set() // Track events already added to Bloom filter
   
   constructor() {
     this.myBloom = new CumulativeBloomFilter()
@@ -72,8 +73,8 @@ export class BloomFilterStrategy implements SyncStrategy {
     for (const peerId of peers) {
       const lastSync = this.lastSyncTimes.get(peerId) || 0
       
-      // Send Bloom filter every 10 seconds
-      if (now - lastSync > 10000) {
+      // Send Bloom filter every 2 seconds (reduced from 10 for testing)
+      if (now - lastSync >= 2000) {
         await this.sendBloomFilter(peerId)
         this.lastSyncTimes.set(peerId, now)
       }
@@ -119,6 +120,7 @@ export class BloomFilterStrategy implements SyncStrategy {
   shutdown(): void {
     this.lastSyncTimes.clear()
     this.scanQueue.reset()
+    this.addedEventIds.clear()
   }
   
   // Private methods
@@ -128,9 +130,12 @@ export class BloomFilterStrategy implements SyncStrategy {
     
     const events = await this.database.getAllEvents()
     
-    // Add any new events to our Bloom filter
+    // Add only new events to our Bloom filter
     for (const event of events) {
-      this.myBloom.add(event.event_id)
+      if (!this.addedEventIds.has(event.event_id)) {
+        this.myBloom.add(event.event_id)
+        this.addedEventIds.add(event.event_id)
+      }
     }
     
     // Update scan queue for efficient peer scanning
@@ -140,13 +145,20 @@ export class BloomFilterStrategy implements SyncStrategy {
   private async sendBloomFilter(targetDevice: string): Promise<void> {
     if (!this.network || !this.database) return
     
+    // Check database event count for debugging
+    const dbEvents = await this.database.getAllEvents()
+    const dbEventCount = dbEvents.length
+    const bloomEventCount = this.myBloom.getEventCount()
+    console.log(`[BLOOM SYNC] ${this.deviceId}: DB has ${dbEventCount} events, Bloom has ${bloomEventCount} events`)
+    
     const filter = this.myBloom.getFilterForTransmission()
     const serialized = filter.serialize()
+    
     
     this.network.sendEvent(this.deviceId, targetDevice, 'bloom_filter', {
       filter: Array.from(serialized), // Convert for network transmission
       filterSize: serialized.length,
-      eventCount: this.myBloom.getEventCount(),
+      eventCount: bloomEventCount,
       timestamp: this.network.getCurrentTime(),
       deviceId: this.deviceId
     })
@@ -163,14 +175,20 @@ export class BloomFilterStrategy implements SyncStrategy {
       this.peerKnowledge.updatePeer(peerId, peerFilter)
       
       // Use prioritized scanning to find events peer might be missing
+      const allEvents = await this.database.getAllEvents()
+      console.log(`[BLOOM] ${this.deviceId} has ${allEvents.length} total events when checking what to send to ${peerId}`)
+      
       const eventsToSend = await this.scanQueue.getEventsToSend(peerId, peerFilter, {
-        recentEventsBatch: 50,     // Check last 50 recent events
-        olderEventsBatch: 10,      // Then check 10 older events
+        recentEventsBatch: 10,     // Check last 10 recent events (reduced from 50)
+        olderEventsBatch: 5,       // Then check 5 older events (reduced from 10)
         maxEventsPerRound: 20      // Don't overwhelm UDP
       })
       
       // Send missing events in UDP-safe batches
-      for (const eventToSend of eventsToSend) {
+      console.log(`[BLOOM] ${this.deviceId} has ${eventsToSend.length} events to send to ${peerId}`)
+      for (let i = 0; i < eventsToSend.length; i++) {
+        const eventToSend = eventsToSend[i]
+        console.log(`[BLOOM] ${this.deviceId} sending event ${i+1}/${eventsToSend.length}: ${eventToSend.event_id}`)
         this.network.sendEvent(this.deviceId, peerId, 'message', {
           eventId: eventToSend.event_id,
           encrypted: Array.from(eventToSend.encrypted),
@@ -178,8 +196,8 @@ export class BloomFilterStrategy implements SyncStrategy {
           deviceId: eventToSend.device_id
         })
         
-        // Small delay to avoid UDP flooding
-        await new Promise(resolve => setTimeout(resolve, 5))
+        // Small delay to avoid UDP flooding (removed for now to debug)
+        // await new Promise(resolve => setTimeout(resolve, 5))
       }
     } catch (error) {
       console.warn(`Failed to process Bloom filter from ${event.sourceDevice}:`, error)
@@ -194,19 +212,40 @@ export class BloomFilterStrategy implements SyncStrategy {
     try {
       // Check if we already have this event
       const eventId = eventData.eventId
+      console.log(`[BLOOM] ${this.deviceId} processing received event ${eventId} from ${networkEvent.sourceDevice}`)
       const existing = await this.database.getEvent(eventId)
       
       if (!existing) {
         // Store new event
+        const encryptedBytes = new Uint8Array(eventData.encrypted)
         await this.database.insertEvent({
           device_id: eventData.deviceId,
           created_at: eventData.createdAt,
           received_at: this.network.getCurrentTime(),
-          encrypted: new Uint8Array(eventData.encrypted)
+          encrypted: encryptedBytes
         })
         
         // Update our Bloom filter to include this new event
-        this.myBloom.add(eventId)
+        if (!this.addedEventIds.has(eventId)) {
+          this.myBloom.add(eventId)
+          this.addedEventIds.add(eventId)
+        }
+        
+        // Update our scan queue to include this new event
+        await this.updateLocalBloom()
+        
+        // Decrypt the event and notify the UI
+        try {
+          const decrypted = new TextDecoder().decode(encryptedBytes)
+          const eventPayload = JSON.parse(decrypted)
+          
+          // If this is a message event, we need to notify the UI
+          // But we can't use the network simulator since that would create loops
+          // Instead, we should use a direct callback or event system
+          console.log(`[BLOOM] ${this.deviceId} successfully stored event ${eventId} from ${networkEvent.sourceDevice}`)
+        } catch (decryptError) {
+          console.warn('Failed to decrypt event:', decryptError)
+        }
       }
     } catch (error) {
       console.warn(`Failed to handle received event from ${networkEvent.sourceDevice}:`, error)

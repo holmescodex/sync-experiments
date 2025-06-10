@@ -22,8 +22,9 @@ export class BloomFilter {
    * Create a filter optimized for UDP transmission (~500 bytes)
    */
   static createUDPOptimal(): BloomFilter {
-    // Target: 500 bytes = 4000 bits for ~10K events
-    return new BloomFilter(10000, 0.01)
+    // Target: 400 bytes = 3200 bits, optimize for ~500 events with 5% FPR
+    // This balances UDP constraints with reasonable accuracy
+    return new BloomFilter(500, 0.05)
   }
   
   /**
@@ -215,12 +216,13 @@ export class PeerKnowledge {
       this.peerFilters.set(peerId, new CumulativeBloomFilter())
     }
     
-    // For simplicity in Phase 2, we'll store the latest filter
-    // In a full implementation, we'd merge with accumulated knowledge
+    // For Phase 2, simulate accumulation by storing the received filter directly
+    // In production, we'd merge with existing knowledge using OR operations
     const knowledge = this.peerFilters.get(peerId)!
     
-    // TODO: Implement proper bit-level merging
-    // For now, this is a simplified version that demonstrates the concept
+    // Simulate knowledge accumulation by marking events from the filter
+    // This is a simplified approach for testing the concept
+    knowledge['currentFilter'] = receivedFilter
   }
   
   /**
@@ -228,9 +230,15 @@ export class PeerKnowledge {
    * Returns true if peer likely doesn't have it, false if they probably do
    */
   shouldSendEvent(peerId: string, eventId: string): boolean {
-    const peerFilter = this.peerFilters.get(peerId)
-    if (!peerFilter) {
+    const peerKnowledge = this.peerFilters.get(peerId)
+    if (!peerKnowledge) {
       return true // No knowledge = send everything
+    }
+    
+    // Check if the peer's filter indicates they have the event
+    const peerFilter = peerKnowledge['currentFilter'] as BloomFilter
+    if (!peerFilter) {
+      return true
     }
     
     // Only send if peer's filter says they DON'T have it

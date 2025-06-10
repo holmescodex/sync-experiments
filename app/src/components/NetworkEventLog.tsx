@@ -20,7 +20,7 @@ export function NetworkEventLog({
   networkStats,
   onConfigUpdate 
 }: NetworkEventLogProps) {
-  const [showBloomEvents, setShowBloomEvents] = useState(true)
+  const [showBloomEvents, setShowBloomEvents] = useState(false)
   const [showFileEvents, setShowFileEvents] = useState(true)
   const [showMessageEvents, setShowMessageEvents] = useState(true)
 
@@ -41,6 +41,35 @@ export function NetworkEventLog({
     if (event.type === 'file_chunk' && !showFileEvents) return false
     return true
   })
+
+  // Calculate filtered stats based on visible event types
+  const calculateFilteredStats = () => {
+    // Group events by ID to get unique events and their final status
+    const eventsByID = new Map<string, NetworkEvent>()
+    
+    // Take the latest status for each event ID, but only for visible types
+    for (const event of filteredEvents) {
+      const existingEvent = eventsByID.get(event.id)
+      if (!existingEvent || event.timestamp >= existingEvent.timestamp) {
+        eventsByID.set(event.id, event)
+      }
+    }
+    
+    const uniqueEvents = Array.from(eventsByID.values())
+    const total = uniqueEvents.length
+    const delivered = uniqueEvents.filter(e => e.status === 'delivered').length
+    const dropped = uniqueEvents.filter(e => e.status === 'dropped').length
+    
+    return {
+      total,
+      delivered,
+      dropped,
+      deliveryRate: total > 0 ? delivered / total : 0,
+      dropRate: total > 0 ? dropped / total : 0
+    }
+  }
+
+  const filteredStats = calculateFilteredStats()
 
   const getEventIcon = (type: NetworkEvent['type']) => {
     switch (type) {
@@ -220,8 +249,23 @@ export function NetworkEventLog({
                 </div>
                 <div className="event-payload">
                   {event.type === 'message' ? (
-                    <span className="message-content">
-                      "{event.payload.content}"
+                    event.payload.content ? (
+                      <span className="message-content">
+                        "{event.payload.content}"
+                      </span>
+                    ) : event.payload.encrypted ? (
+                      <span className="sync-message">
+                        📦 Encrypted event: {event.payload.eventId || 'unknown'}
+                      </span>
+                    ) : (
+                      <span className="technical-payload">
+                        message data
+                      </span>
+                    )
+                  ) : event.type === 'bloom_filter' ? (
+                    <span className="bloom-details">
+                      🌸 Bloom filter: {event.payload.eventCount || 0} events, 
+                      {event.payload.filterSize || 0} bytes
                     </span>
                   ) : (
                     <span className="technical-payload">

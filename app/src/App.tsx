@@ -3,7 +3,9 @@ import { SimulationEngine, type DeviceFrequency, type SimulationEvent } from './
 import { ChatInterface, type ChatInterfaceRef } from './components/ChatInterface'
 import { EventLogWithControls } from './components/EventLogWithControls'
 import { NetworkEventLog } from './components/NetworkEventLog'
+import { DevicePanel } from './components/DevicePanel'
 import type { NetworkEvent } from './network/simulator'
+import { createChatAPI, type ChatAPI } from './api/ChatAPI'
 import './App.css'
 
 function App() {
@@ -11,6 +13,8 @@ function App() {
   const [currentTime, setCurrentTime] = useState(0)
   const [isRunning, setIsRunning] = useState(true)
   const [speedMultiplier, setSpeedMultiplier] = useState(1)
+  const [globalMessagesPerHour, setGlobalMessagesPerHour] = useState(50)
+  const [imageAttachmentPercentage, setImageAttachmentPercentage] = useState(30)
   const [frequencies, setFrequencies] = useState<DeviceFrequency[]>([
     { deviceId: 'alice', messagesPerHour: 30, enabled: true },
     { deviceId: 'bob', messagesPerHour: 20, enabled: true }
@@ -19,48 +23,88 @@ function App() {
   const [executedEvents, setExecutedEvents] = useState<SimulationEvent[]>([])
   const [networkEvents, setNetworkEvents] = useState<NetworkEvent[]>([])
   const [syncStatus, setSyncStatus] = useState<Map<string, { isSynced: boolean, syncPercentage: number }>>(new Map())
+  const [databasesInitialized, setDatabasesInitialized] = useState(false)
+  const [chatAPIs, setChatAPIs] = useState<Map<string, ChatAPI>>(new Map())
   
   const aliceRef = useRef<ChatInterfaceRef>(null)
   const bobRef = useRef<ChatInterfaceRef>(null)
 
   useEffect(() => {
-    // Initialize engine with frequencies
-    engine.setDeviceFrequencies(frequencies)
-    
-    // Set up event execution callback
-    engine.onEventExecute((event: SimulationEvent) => {
-      setExecutedEvents(prev => [...prev, event])
+    // Initialize engine with global rate distributed across enabled devices
+    const initializeEngine = async () => {
+      const enabledDevices = frequencies.filter(f => f.enabled)
+      const ratePerDevice = enabledDevices.length > 0 ? globalMessagesPerHour / enabledDevices.length : 0
       
-      // Route event to appropriate device (only for self-generated events)
-      if (event.type === 'message') {
-        if (event.deviceId === 'alice' && aliceRef.current) {
-          aliceRef.current.handleSimulationMessage(event.data.content)
-        } else if (event.deviceId === 'bob' && bobRef.current) {
-          bobRef.current.handleSimulationMessage(event.data.content)
+      const updatedFrequencies = frequencies.map(freq => ({
+        ...freq,
+        messagesPerHour: freq.enabled ? ratePerDevice : 0
+      }))
+      
+      await engine.setDeviceFrequencies(updatedFrequencies)
+      setDatabasesInitialized(true)
+      
+      // Create ChatAPI instances for each device
+      const apis = new Map<string, ChatAPI>()
+      for (const freq of updatedFrequencies) {
+        const api = createChatAPI(freq.deviceId, engine)
+        if (api) {
+          apis.set(freq.deviceId, api)
         }
       }
-    })
+      setChatAPIs(apis)
+      
+      // Set up event execution callback
+      engine.onEventExecute((event: SimulationEvent) => {
+        setExecutedEvents(prev => [...prev, event])
+        
+        // Route event to appropriate device (only for self-generated events)
+        if (event.type === 'message') {
+          if (event.deviceId === 'alice' && aliceRef.current) {
+            aliceRef.current.handleSimulationMessage(event.data.content)
+          } else if (event.deviceId === 'bob' && bobRef.current) {
+            bobRef.current.handleSimulationMessage(event.data.content)
+          }
+        }
+      })
+      
+      // Set up network message callback for cross-device messaging
+      engine.onNetworkMessage((deviceId: string, content: string, fromDevice: string) => {
+        if (deviceId === 'alice' && aliceRef.current) {
+          aliceRef.current.handleSimulationMessage(content)
+        } else if (deviceId === 'bob' && bobRef.current) {
+          bobRef.current.handleSimulationMessage(content)
+        }
+      })
+    }
     
-    // Set up network message callback for cross-device messaging
-    engine.onNetworkMessage((deviceId: string, content: string, fromDevice: string) => {
-      if (deviceId === 'alice' && aliceRef.current) {
-        aliceRef.current.handleSimulationMessage(content)
-      } else if (deviceId === 'bob' && bobRef.current) {
-        bobRef.current.handleSimulationMessage(content)
-      }
-    })
+    initializeEngine()
     
     // Set up simulation tick interval
-    const intervalId = setInterval(() => {
-      engine.tick()
+    const intervalId = setInterval(async () => {
+      await engine.tick()
       setCurrentTime(engine.currentSimTime())
       setUpcomingEvents(engine.getUpcomingEvents(10))
       setNetworkEvents(engine.getNetworkEvents(50))
       setSyncStatus(engine.getDeviceSyncStatus())
+      
+      // Debug logging every 5 seconds
+      if (Math.floor(engine.currentSimTime() / 5000) > Math.floor((engine.currentSimTime() - 100) / 5000)) {
+        const aliceDb = engine.getDeviceDatabase('alice')
+        const bobDb = engine.getDeviceDatabase('bob')
+        if (aliceDb && bobDb) {
+          const aliceEvents = await aliceDb.getAllEvents()
+          const bobEvents = await bobDb.getAllEvents()
+          console.log(`[APP DEBUG] Time: ${engine.currentSimTime()}ms - Alice: ${aliceEvents.length} events, Bob: ${bobEvents.length} events`)
+        }
+      }
     }, 100) // 100ms real-time ticks
 
-    return () => clearInterval(intervalId)
-  }, [engine, frequencies])
+    return () => {
+      clearInterval(intervalId)
+      // Clean up ChatAPIs
+      chatAPIs.forEach(api => api.destroy())
+    }
+  }, [engine, frequencies, globalMessagesPerHour])
 
   const handlePause = () => {
     engine.pause()
@@ -83,14 +127,38 @@ function App() {
     window.location.reload()
   }
 
-  const handleFrequencyUpdate = (newFrequencies: DeviceFrequency[]) => {
+  const handleFrequencyUpdate = async (newFrequencies: DeviceFrequency[]) => {
     setFrequencies(newFrequencies)
-    engine.setDeviceFrequencies(newFrequencies)
+    // Frequencies will be recalculated in useEffect based on global rate
   }
 
-  const handleManualMessage = (deviceId: string, content: string) => {
+  const handleGlobalMessagesPerHourUpdate = (rate: number) => {
+    setGlobalMessagesPerHour(rate)
+  }
+
+  const handleImagePercentageUpdate = (percentage: number) => {
+    setImageAttachmentPercentage(percentage)
+  }
+
+  const handleManualMessage = async (deviceId: string, content: string, attachments?: any[]) => {
     // Add manual message to simulation timeline
-    engine.createMessageEvent(deviceId, content)
+    // For now, combine content and attachment info into the message content
+    // In future phases, this will properly handle file chunks and content IDs
+    let messageContent = content
+    if (attachments && attachments.length > 0) {
+      const fileInfo = attachments.map(att => `[${att.name}]`).join(' ')
+      messageContent = content ? `${content} ${fileInfo}` : fileInfo
+    }
+    
+    console.log(`[App] Manual message from ${deviceId}: "${messageContent}"`)
+    await engine.createMessageEvent(deviceId, messageContent)
+    
+    // Debug: Check database immediately after
+    const db = engine.getDeviceDatabase(deviceId)
+    if (db) {
+      const events = await db.getAllEvents()
+      console.log(`[App] ${deviceId}'s database now has ${events.length} events`)
+    }
   }
 
   const handleNetworkConfigUpdate = (config: any) => {
@@ -110,6 +178,10 @@ function App() {
             onUpdateFrequencies={handleFrequencyUpdate}
             isRunning={isRunning}
             speedMultiplier={speedMultiplier}
+            globalMessagesPerHour={globalMessagesPerHour}
+            onUpdateGlobalMessagesPerHour={handleGlobalMessagesPerHourUpdate}
+            imageAttachmentPercentage={imageAttachmentPercentage}
+            onUpdateImagePercentage={handleImagePercentageUpdate}
             onPause={handlePause}
             onResume={handleResume}
             onSetSpeed={handleSetSpeed}
@@ -142,15 +214,47 @@ function App() {
                 deviceId="alice" 
                 currentSimTime={currentTime}
                 syncStatus={syncStatus.get('alice')}
+                imageAttachmentPercentage={imageAttachmentPercentage}
                 onManualMessage={handleManualMessage}
+                chatAPI={chatAPIs.get('alice')}
               />
               <ChatInterface 
                 ref={bobRef}
                 deviceId="bob" 
                 currentSimTime={currentTime}
                 syncStatus={syncStatus.get('bob')}
+                imageAttachmentPercentage={imageAttachmentPercentage}
                 onManualMessage={handleManualMessage}
+                chatAPI={chatAPIs.get('bob')}
               />
+            </div>
+            
+            {/* Device Activity Panels */}
+            <div className="device-activity-section">
+              <div className="section-header">
+                <h3>Device Database Activity</h3>
+                <p className="section-description">
+                  Real-time view of events stored in each device's SQLite database
+                </p>
+              </div>
+              <div className="device-panels">
+                {databasesInitialized ? (
+                  <>
+                    <DevicePanel 
+                      deviceId="alice"
+                      database={engine.getDeviceDatabase('alice')}
+                      syncManager={engine.getSyncManager('alice')}
+                    />
+                    <DevicePanel 
+                      deviceId="bob"
+                      database={engine.getDeviceDatabase('bob')}
+                      syncManager={engine.getSyncManager('bob')}
+                    />
+                  </>
+                ) : (
+                  <p>Initializing databases...</p>
+                )}
+              </div>
             </div>
           </div>
         </section>

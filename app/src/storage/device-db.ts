@@ -2,12 +2,12 @@ import initSqlJs, { type Database } from 'sql.js'
 import { hash } from 'tweetnacl'
 
 export interface Event {
+  event_id: string           // Content-addressed hash of encrypted payload
   device_id: string          // Device that created this event
   created_at: number         // Device's wall-clock time when created
   received_at: number        // This device's wall-clock time when received
   simulation_event_id?: number // For debugging - which sim event caused this
   encrypted: Uint8Array      // AEAD encrypted payload
-  // Note: event_id is computed as hash(encrypted) and stored separately in DB
 }
 
 export class DeviceDB {
@@ -55,7 +55,7 @@ export class DeviceDB {
     `)
   }
 
-  async insertEvent(event: Event): Promise<string> {
+  async insertEvent(event: Omit<Event, 'event_id'>): Promise<string> {
     if (!this.db) throw new Error('Database not initialized')
     
     const eventId = this.computeEventId(event.encrypted)
@@ -92,6 +92,7 @@ export class DeviceDB {
     stmt.free()
     
     return {
+      event_id: result.event_id as string,
       device_id: result.device_id as string,
       created_at: result.created_at as number,
       received_at: result.received_at as number,
@@ -110,6 +111,7 @@ export class DeviceDB {
     while (stmt.step()) {
       const row = stmt.getAsObject()
       results.push({
+        event_id: row.event_id as string,
         device_id: row.device_id as string,
         created_at: row.created_at as number,
         received_at: row.received_at as number,
@@ -137,7 +139,10 @@ export class DeviceDB {
   }
 
   private computeEventId(encrypted: Uint8Array): string {
-    const hashBytes = hash(encrypted)
+    // Convert to proper Uint8Array if needed (handle different contexts in Node.js vs browser)
+    const encryptedBytes = encrypted instanceof Uint8Array ? encrypted : new Uint8Array(encrypted)
+    
+    const hashBytes = hash(encryptedBytes)
     return Array.from(hashBytes.slice(0, 8))
       .map(b => b.toString(16).padStart(2, '0'))
       .join('')

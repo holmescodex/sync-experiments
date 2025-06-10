@@ -39,8 +39,12 @@ export class EventScanQueue {
     const eventsToSend: Event[] = []
     
     // 1. Always check recent events first (highest priority)
-    for (const event of this.recentEvents.slice(0, options.recentEventsBatch)) {
+    const recentToCheck = this.recentEvents.slice(0, options.recentEventsBatch)
+    console.log(`[SCAN] Checking ${recentToCheck.length} recent events (total recent: ${this.recentEvents.length}), total events: ${this.allEvents.length}`)
+    
+    for (const event of recentToCheck) {
       if (!peerFilter.test(event.event_id)) {
+        console.log(`[SCAN] Event ${event.event_id} not in peer filter, adding to send list`)
         eventsToSend.push(event)
         if (eventsToSend.length >= options.maxEventsPerRound) {
           return eventsToSend // Hit UDP batch limit
@@ -48,11 +52,13 @@ export class EventScanQueue {
       }
     }
     
-    // 2. Round-robin through older events if we have room
-    if (eventsToSend.length < options.maxEventsPerRound) {
+    // 2. Round-robin through older events if we have room (or if no recent events were found)
+    if (eventsToSend.length < options.maxEventsPerRound && this.allEvents.length > 0) {
       const olderEvents = this.allEvents.filter(e => 
         !this.recentEvents.some(recent => recent.event_id === e.event_id)
       )
+      
+      console.log(`[SCAN] Checking ${Math.min(options.olderEventsBatch, olderEvents.length)} older events (total older: ${olderEvents.length})`)
       
       if (olderEvents.length > 0) {
         // Continue from where we left off last time (round-robin)
@@ -61,7 +67,13 @@ export class EventScanQueue {
           const event = olderEvents[index]
           
           if (event && !peerFilter.test(event.event_id)) {
-            eventsToSend.push(event)
+            // Check if we haven't already added this event
+            if (!eventsToSend.some(e => e.event_id === event.event_id)) {
+              console.log(`[SCAN] Older event ${event.event_id} not in peer filter, adding to send list`)
+              eventsToSend.push(event)
+            }
+          } else if (event) {
+            console.log(`[SCAN] Older event ${event.event_id} already in peer filter, skipping`)
           }
         }
         

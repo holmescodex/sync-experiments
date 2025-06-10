@@ -95,21 +95,23 @@ describe('Network Simulation Integration', () => {
     expect(bobStatus?.syncPercentage).toBeLessThan(100)
   })
 
-  test('network statistics track packet delivery', () => {
+  test('network statistics track packet delivery', async () => {
     // Create some messages
-    engine.createMessageEvent('alice', 'Message 1')
-    engine.createMessageEvent('bob', 'Message 2')
+    await engine.createMessageEvent('alice', 'Message 1')
+    await engine.createMessageEvent('bob', 'Message 2')
     
     // Run simulation
     for (let i = 0; i < 30; i++) {
-      engine.tick()
+      await engine.tick()
     }
     
     const stats = engine.getNetworkStats()
+    
+    // With zero packet loss and sufficient time, all events should be delivered
     expect(stats.total).toBeGreaterThan(0)
-    expect(stats.sent).toBeGreaterThan(0)
     expect(stats.delivered).toBeGreaterThan(0)
-    expect(stats.deliveryRate).toBeGreaterThan(0)
+    expect(stats.deliveryRate).toBe(1) // 100% delivery rate with no packet loss
+    expect(stats.dropRate).toBe(0) // 0% drop rate with no packet loss
   })
 
   test('automatic event generation creates network traffic', () => {

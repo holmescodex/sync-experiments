@@ -35,7 +35,10 @@ export class MessageGenerator {
 
     const encrypted = this.encrypt(JSON.stringify(payload))
 
+    const eventId = `msg-${this.deviceId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    
     return {
+      event_id: eventId,
       device_id: this.deviceId,
       created_at: deviceWallClockTime,
       received_at: deviceWallClockTime, // Same for creator
