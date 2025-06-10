@@ -1,6 +1,7 @@
 import { useState, useEffect, forwardRef, useImperativeHandle, useRef } from 'react'
 import type { ChatAPI, ChatMessage } from '../api/ChatAPI'
 import { BackendAdapter } from '../api/BackendAdapter'
+import { EmojiPicker } from './EmojiPicker'
 // Image compression moved to backend
 
 // Utility function for formatting file sizes
@@ -25,6 +26,7 @@ interface FileAttachment {
   originalSize?: number
   compressed?: boolean
   compressionRatio?: number
+  originalFile?: File // Store the original File object for sending
 }
 
 interface Message {
@@ -35,6 +37,11 @@ interface Message {
   attachments?: FileAttachment[]
   isOwn?: boolean
   author?: string
+  reactions?: Array<{
+    emoji: string
+    author: string
+    timestamp: number
+  }>
 }
 
 interface ChatInterfaceProps {
@@ -51,7 +58,7 @@ interface ChatInterfaceProps {
 }
 
 export interface ChatInterfaceRef {
-  handleSimulationMessage: (content: string) => void
+  handleSimulationMessage: (content: string, attachments?: any[]) => void
 }
 
 export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
@@ -59,6 +66,9 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     const [messages, setMessages] = useState<Message[]>([])
     const [inputValue, setInputValue] = useState('')
     const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([])
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+    const [emojiPickerMessageId, setEmojiPickerMessageId] = useState<string | null>(null)
+    const [emojiPickerPosition, setEmojiPickerPosition] = useState<{ x: number, y: number } | undefined>()
     const fileInputRef = useRef<HTMLInputElement>(null)
     const messagesContainerRef = useRef<HTMLDivElement>(null)
 
@@ -88,17 +98,26 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
             content: msg.content,
             timestamp: msg.timestamp,
             isOwn: msg.isOwn,
-          author: msg.author,
-          fromSimulation: !msg.isOwn,
-          attachments: msg.attachments
-        }))
+            author: msg.author,
+            fromSimulation: !msg.isOwn,
+            attachments: msg.attachments?.map(att => ({
+              id: `api-${att.fileId}`,
+              type: att.mimeType?.startsWith('image/') ? 'image' as const : 'document' as const,
+              name: att.fileName || 'file',
+              size: Math.round(att.chunkCount * 500), // Estimate from chunk count
+              url: `/test-images/${att.fileName}`, // For demo
+              mimeType: att.mimeType || 'application/octet-stream',
+              loadingState: 'loaded' as const
+            })),
+            reactions: msg.reactions
+          }))
         setMessages(convertedMessages)
       })
       
       return () => {
         unsubscribe()
       }
-      }
+    }
     }, [chatAPI, backendAdapter])
 
     // Auto-scroll to bottom when messages change
@@ -109,23 +128,20 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     }, [messages])
 
     useImperativeHandle(ref, () => ({
-      handleSimulationMessage: (content: string) => {
-        // Demo: Sometimes add random test images to simulation messages
-        const shouldHaveAttachment = Math.random() < (imageAttachmentPercentage / 100)
-        let attachments: FileAttachment[] | undefined
+      handleSimulationMessage: (content: string, attachments?: any[]) => {
+        // Convert simulation engine attachments to UI format
+        let uiAttachments: FileAttachment[] | undefined
         
-        if (shouldHaveAttachment && content.length > 10) {
-          const testImages = ['landscape.jpg', 'portrait.jpg', 'abstract.jpg', 'diagram.png', 'small.jpg']
-          const randomImage = testImages[Math.floor(Math.random() * testImages.length)]
-          attachments = [{
-            id: `demo-${Date.now()}`,
-            type: 'image',
-            name: randomImage,
-            size: Math.floor(Math.random() * 50000) + 10000, // Random size between 10-60KB
-            url: `/test-images/${randomImage}`,
-            mimeType: randomImage.endsWith('.png') ? 'image/png' : 'image/jpeg',
-            loadingState: 'loaded'
-          }]
+        if (attachments && attachments.length > 0) {
+          uiAttachments = attachments.map(att => ({
+            id: `sim-${Date.now()}-${Math.random()}`,
+            type: att.mimeType?.startsWith('image/') ? 'image' as const : 'document' as const,
+            name: att.fileName || 'file',
+            size: Math.round(att.chunkCount * 500), // Estimate size from chunk count
+            url: `/test-images/${att.fileName}`, // For demo, use test image path
+            mimeType: att.mimeType || 'application/octet-stream',
+            loadingState: 'loaded' as const
+          }))
         }
         
         const newMessage: Message = {
@@ -133,7 +149,7 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
           content,
           timestamp: currentSimTime,
           fromSimulation: true,
-          attachments
+          attachments: uiAttachments
         }
         setMessages(prev => [...prev, newMessage])
       }
@@ -156,7 +172,8 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
           url: URL.createObjectURL(file),
           mimeType: file.type,
           loadingState: 'loading',
-          compressed: false
+          compressed: false,
+          originalFile: file // Store the original File object
         }
         
         newAttachments.push(attachment)
@@ -198,31 +215,85 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
     }
 
     const handleSendMessage = async () => {
-      if (!inputValue.trim() && selectedFiles.length === 0) return
+      console.log('[ChatInterface] handleSendMessage called', { inputValue, selectedFilesCount: selectedFiles.length })
+      
+      if (!inputValue.trim() && selectedFiles.length === 0) {
+        console.log('[ChatInterface] No content or files, returning early')
+        return
+      }
       
       const content = inputValue.trim()
       const files = selectedFiles.length > 0 ? selectedFiles : undefined
       
-      // If using backend adapter, send directly through API
-      if (backendAdapter) {
-        try {
+      console.log('[ChatInterface] Preparing to send', { content, hasFiles: !!files, chatAPI: !!chatAPI, backendAdapter: !!backendAdapter })
+      
+      try {
+        // Priority: ChatAPI > BackendAdapter > Simulation Engine
+        if (chatAPI && selectedFiles.length > 0) {
+          console.log('[ChatInterface] Using ChatAPI path with files')
+          // Use the original File objects directly
+          const actualFiles: File[] = selectedFiles
+            .map(attachment => attachment.originalFile)
+            .filter((file): file is File => file !== undefined)
+          
+          console.log('[ChatInterface] Converted to actualFiles:', actualFiles.length)
+          
+          await chatAPI.sendMessageWithFiles(content, actualFiles)
+          console.log('[ChatInterface] ChatAPI.sendMessageWithFiles completed')
+          
+          // Also add to simulation timeline for visualization
+          console.log('[ChatInterface] Calling onManualMessage for timeline')
+          onManualMessage(deviceId, content, files)
+        } else if (chatAPI) {
+          console.log('[ChatInterface] Using ChatAPI path without files')
+          await chatAPI.sendMessage(content)
+        } else if (backendAdapter) {
+          console.log('[ChatInterface] Using BackendAdapter path')
           await backendAdapter.sendMessage(content, files)
-          setInputValue('')
-          setSelectedFiles([])
-        } catch (error) {
-          console.error('Failed to send message:', error)
+        } else {
+          console.log('[ChatInterface] Using fallback simulation engine path')
+          // Fallback to simulation engine
+          onManualMessage(deviceId, content, files)
         }
-      } else {
-        // Otherwise use the simulation engine
-        onManualMessage(deviceId, content, files)
+        
+        console.log('[ChatInterface] Clearing input and files')
         setInputValue('')
         setSelectedFiles([])
+        console.log('[ChatInterface] Message sending completed successfully')
+      } catch (error) {
+        console.error('[ChatInterface] Failed to send message:', error)
       }
     }
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
       if (e.key === 'Enter') {
         handleSendMessage()
+      }
+    }
+
+    const handleAddReaction = (messageId: string, e: React.MouseEvent) => {
+      e.stopPropagation()
+      const rect = (e.target as HTMLElement).getBoundingClientRect()
+      setEmojiPickerMessageId(messageId)
+      setEmojiPickerPosition({ x: rect.left, y: rect.bottom + 5 })
+      setShowEmojiPicker(true)
+    }
+
+    const handleEmojiSelect = async (emoji: string) => {
+      if (emojiPickerMessageId && chatAPI) {
+        await chatAPI.addReaction(emojiPickerMessageId, emoji)
+      }
+      setShowEmojiPicker(false)
+      setEmojiPickerMessageId(null)
+    }
+
+    const handleReactionClick = async (messageId: string, emoji: string, hasReacted: boolean) => {
+      if (!chatAPI) return
+      
+      if (hasReacted) {
+        await chatAPI.removeReaction(messageId, emoji)
+      } else {
+        await chatAPI.addReaction(messageId, emoji)
       }
     }
 
@@ -272,6 +343,9 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
                 key={message.id} 
                 className={`message ${message.isOwn ? 'sent' : 'received'}`}
               >
+                {!message.isOwn && message.author && (
+                  <div className="message-author">{message.author}</div>
+                )}
                 <div className="message-bubble">
                   {message.content && (
                     <div className="message-content">{message.content}</div>
@@ -328,7 +402,37 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
                   <div className="message-time">
                     {formatTime(message.timestamp)}
                   </div>
+                  {(message.reactions && message.reactions.length > 0) && (
+                    <div className="message-reactions">
+                      {Object.entries(
+                        message.reactions.reduce((acc, reaction) => {
+                          if (!acc[reaction.emoji]) acc[reaction.emoji] = []
+                          acc[reaction.emoji].push(reaction.author)
+                          return acc
+                        }, {} as Record<string, string[]>)
+                      ).map(([emoji, authors]) => {
+                        const hasReacted = authors.includes(deviceId)
+                        return (
+                          <button
+                            key={emoji}
+                            className={`reaction-badge ${hasReacted ? 'own' : ''}`}
+                            onClick={() => handleReactionClick(message.id, emoji, hasReacted)}
+                          >
+                            <span>{emoji}</span>
+                            <span className="reaction-count">{authors.length}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
+                <button
+                  className="add-reaction-button"
+                  onClick={(e) => handleAddReaction(message.id, e)}
+                  title="Add reaction"
+                >
+                  😊
+                </button>
               </div>
             ))
           )}
@@ -414,6 +518,7 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
             onClick={handleSendMessage}
             disabled={!inputValue.trim() && selectedFiles.length === 0}
             className="send-button"
+            aria-label="Send message"
           >
             Send
           </button>
@@ -448,6 +553,17 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
               </div>
             )}
           </div>
+        )}
+        
+        {showEmojiPicker && (
+          <EmojiPicker
+            onEmojiSelect={handleEmojiSelect}
+            onClose={() => {
+              setShowEmojiPicker(false)
+              setEmojiPickerMessageId(null)
+            }}
+            position={emojiPickerPosition}
+          />
         )}
       </div>
     )

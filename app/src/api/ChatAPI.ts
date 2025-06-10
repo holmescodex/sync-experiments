@@ -24,6 +24,13 @@ export interface ChatMessage {
   timestamp: number
   isOwn: boolean
   attachments?: FileMessageAttachment[]
+  reactions?: MessageReaction[]
+}
+
+export interface MessageReaction {
+  emoji: string
+  author: string
+  timestamp: number
 }
 
 export interface ChatAPIConfig {
@@ -67,7 +74,8 @@ export class ChatAPI {
    */
   async loadMessages(): Promise<ChatMessage[]> {
     const events = await this.database.getAllEvents()
-    const messages: ChatMessage[] = []
+    const messages: Map<string, ChatMessage> = new Map()
+    const reactions: Map<string, MessageReaction[]> = new Map()
     
     for (const event of events) {
       try {
@@ -75,24 +83,56 @@ export class ChatAPI {
         const decrypted = new TextDecoder().decode(event.encrypted)
         const payload = JSON.parse(decrypted)
         
-        // Only process message events
+        // Process message events
         if (payload.type === 'message') {
-          messages.push({
+          messages.set(event.event_id, {
             id: event.event_id,
             content: payload.content || '',
             author: payload.author || event.device_id,
             timestamp: event.created_at,
             isOwn: event.device_id === this.deviceId,
-            attachments: payload.attachments
+            attachments: payload.attachments,
+            reactions: []
           })
+        }
+        // Process reaction events
+        else if (payload.type === 'reaction') {
+          const messageReactions = reactions.get(payload.messageId) || []
+          
+          if (payload.remove) {
+            // Remove reaction
+            const index = messageReactions.findIndex(
+              r => r.emoji === payload.emoji && r.author === (payload.author || event.device_id)
+            )
+            if (index >= 0) {
+              messageReactions.splice(index, 1)
+            }
+          } else {
+            // Add reaction
+            messageReactions.push({
+              emoji: payload.emoji,
+              author: payload.author || event.device_id,
+              timestamp: event.created_at
+            })
+          }
+          
+          reactions.set(payload.messageId, messageReactions)
         }
       } catch (error) {
         console.warn(`Failed to decrypt event ${event.event_id}:`, error)
       }
     }
     
-    // Sort by timestamp
-    return messages.sort((a, b) => a.timestamp - b.timestamp)
+    // Attach reactions to messages
+    for (const [messageId, messageReactions] of reactions) {
+      const message = messages.get(messageId)
+      if (message) {
+        message.reactions = messageReactions
+      }
+    }
+    
+    // Sort by timestamp and return
+    return Array.from(messages.values()).sort((a, b) => a.timestamp - b.timestamp)
   }
   
   /**
@@ -104,10 +144,43 @@ export class ChatAPI {
   }
   
   /**
+   * Add a reaction to a message
+   */
+  async addReaction(messageId: string, emoji: string): Promise<void> {
+    // Create a reaction event
+    await this.engine.createReactionEvent(this.deviceId, messageId, emoji)
+  }
+  
+  /**
+   * Remove a reaction from a message
+   */
+  async removeReaction(messageId: string, emoji: string): Promise<void> {
+    // Create a reaction removal event
+    await this.engine.createReactionEvent(this.deviceId, messageId, emoji, true)
+  }
+  
+  /**
    * Upload a file and get attachment metadata
    */
   async uploadFile(fileData: Uint8Array, mimeType: string, fileName?: string): Promise<FileMessageAttachment> {
     return await this.fileChunkHandler.uploadFile(fileData, mimeType, fileName)
+  }
+
+  /**
+   * Send a message with file attachments - handles upload + message creation
+   */
+  async sendMessageWithFiles(content: string, files: File[]): Promise<void> {
+    const attachments: FileMessageAttachment[] = []
+    
+    // Upload each file and get attachment metadata
+    for (const file of files) {
+      const fileData = new Uint8Array(await file.arrayBuffer())
+      const attachment = await this.uploadFile(fileData, file.type, file.name)
+      attachments.push(attachment)
+    }
+    
+    // Send message with all attachments
+    await this.sendMessage(content, attachments)
   }
   
   /**
@@ -142,15 +215,19 @@ export class ChatAPI {
    * In a real app, this would use WebSockets or EventSource
    */
   private startPolling() {
-    // Poll every 500ms for new messages
+    // Poll every 500ms for new messages and reactions
     this.pollInterval = setInterval(async () => {
       try {
         const events = await this.database.getAllEvents()
         
-        // Check if we have new events
+        // Check if we have new events (including reactions)
         if (events.length > this.lastEventCount) {
           const newEvents = events.slice(this.lastEventCount)
           this.lastEventCount = events.length
+          
+          // Check if any new events are reactions or messages
+          let hasNewMessage = false
+          let hasNewReaction = false
           
           // Process new events
           for (const event of newEvents) {
@@ -159,6 +236,7 @@ export class ChatAPI {
               const payload = JSON.parse(decrypted)
               
               if (payload.type === 'message') {
+                hasNewMessage = true
                 const message: ChatMessage = {
                   id: event.event_id,
                   content: payload.content || '',
@@ -177,6 +255,9 @@ export class ChatAPI {
                 
                 // Notify new message callbacks
                 this.newMessageCallbacks.forEach(cb => cb(message))
+              } else if (payload.type === 'reaction') {
+                hasNewReaction = true
+                // Reactions will be processed when we reload all messages
               } else if (payload.type === 'file_chunk') {
                 // Handle file chunk events
                 const chunkData = Buffer.from(payload.chunkData, 'base64')
@@ -192,7 +273,8 @@ export class ChatAPI {
             }
           }
           
-          // Notify full update callbacks
+          // Always notify full update callbacks when we have new events
+          // This ensures reactions are properly displayed
           if (this.messageCallbacks.size > 0) {
             const allMessages = await this.loadMessages()
             this.messageCallbacks.forEach(cb => cb(allMessages))

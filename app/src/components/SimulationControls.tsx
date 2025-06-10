@@ -57,17 +57,19 @@ export function SimulationControls({
             <button 
               onClick={onPause} 
               className="control-btn pause-btn"
+              data-testid="play-pause-button"
               title="Pause simulation"
             >
-              ⏸
+              ⏸ Pause
             </button>
           ) : (
             <button 
               onClick={onResume} 
               className="control-btn play-btn"
+              data-testid="play-pause-button"
               title="Resume simulation"
             >
-              ▶
+              ▶ Resume
             </button>
           )}
           

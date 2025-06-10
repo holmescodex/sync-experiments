@@ -8,6 +8,9 @@ import { DevConsoleMonitor } from './components/DevConsoleMonitor'
 import type { NetworkEvent } from './network/simulator'
 import { createChatAPI, type ChatAPI } from './api/ChatAPI'
 import { BackendAdapter } from './api/BackendAdapter'
+import { simulationEngineAPI } from './api/SimulationEngineAPI'
+import { BackendNetworkAPI } from './api/BackendNetworkAPI'
+import { BackendStatsAPI } from './api/BackendStatsAPI'
 import './App.css'
 
 function App() {
@@ -30,6 +33,24 @@ function App() {
   const [backendAdapters, setBackendAdapters] = useState<Map<string, BackendAdapter>>(new Map())
   const [databaseStats, setDatabaseStats] = useState<Map<string, { eventCount: number, syncPercentage: number }>>(new Map())
   const [showIndicator, setShowIndicator] = useState(true)
+  const [backendNetworkAPI] = useState(() => new BackendNetworkAPI())
+  const [backendStatsAPIs] = useState(() => new Map<string, BackendStatsAPI>([
+    ['alice', new BackendStatsAPI('http://localhost:3001')],
+    ['bob', new BackendStatsAPI('http://localhost:3002')]
+  ]))
+  const [backendNetworkConfig, setBackendNetworkConfig] = useState<NetworkConfig>({ 
+    packetLossRate: 0, 
+    minLatency: 10, 
+    maxLatency: 100, 
+    jitter: 20 
+  })
+  const [backendNetworkStats, setBackendNetworkStats] = useState({ 
+    total: 0, 
+    delivered: 0, 
+    dropped: 0, 
+    deliveryRate: 0, 
+    dropRate: 0 
+  })
   
   const aliceRef = useRef<ChatInterfaceRef>(null)
   const bobRef = useRef<ChatInterfaceRef>(null)
@@ -78,6 +99,7 @@ function App() {
       }
       
       setBackendAdapters(adapters)
+      console.log('[App] Backend adapters initialized:', Array.from(adapters.entries()).map(([id, adapter]) => `${id}: ${adapter.getBackendType()}`))
     }
     
     initBackendAdapters()
@@ -95,6 +117,7 @@ function App() {
       }))
       
       await engine.setDeviceFrequencies(updatedFrequencies)
+      engine.setImageAttachmentPercentage(imageAttachmentPercentage)
       setDatabasesInitialized(true)
       
       // Create ChatAPI instances for each device
@@ -114,9 +137,9 @@ function App() {
         // Route event to appropriate device (only for self-generated events)
         if (event.type === 'message') {
           if (event.deviceId === 'alice' && aliceRef.current) {
-            aliceRef.current.handleSimulationMessage(event.data.content)
+            aliceRef.current.handleSimulationMessage(event.data.content, event.data.attachments)
           } else if (event.deviceId === 'bob' && bobRef.current) {
-            bobRef.current.handleSimulationMessage(event.data.content)
+            bobRef.current.handleSimulationMessage(event.data.content, event.data.attachments)
           }
         }
       })
@@ -135,27 +158,48 @@ function App() {
     
     // Set up simulation tick interval
     const intervalId = setInterval(async () => {
-      await engine.tick()
-      setCurrentTime(engine.currentSimTime())
-      setUpcomingEvents(engine.getUpcomingEvents(10))
-      setNetworkEvents(engine.getNetworkEvents(1000))
-      const deviceSyncStatus = engine.getDeviceSyncStatus()
-      setSyncStatus(deviceSyncStatus)
+      // Don't tick the engine - simulation runs in backend
+      setCurrentTime(Date.now())
+      setUpcomingEvents([]) // No upcoming events in frontend
       
-      // Update database stats
+      // Always fetch network events from backend
+      const backendEvents = await backendNetworkAPI.getNetworkEvents(1000)
+      setNetworkEvents(backendEvents)
+      
+      // Fetch device stats from backends
+      const syncStatusMap = new Map<string, { isSynced: boolean, syncPercentage: number }>()
       const dbStats = new Map<string, { eventCount: number, syncPercentage: number }>()
-      for (const deviceId of ['alice', 'bob']) {
-        const db = engine.getDeviceDatabase(deviceId)
-        if (db) {
-          const events = await db.getAllEvents()
-          const syncData = deviceSyncStatus.get(deviceId)
+      
+      for (const [deviceId, statsAPI] of backendStatsAPIs) {
+        const stats = await statsAPI.getStats()
+        if (stats) {
+          syncStatusMap.set(deviceId, {
+            isSynced: stats.syncPercentage === 100,
+            syncPercentage: stats.syncPercentage
+          })
           dbStats.set(deviceId, {
-            eventCount: events.length,
-            syncPercentage: syncData?.syncPercentage || 0
+            eventCount: stats.eventCount,
+            syncPercentage: stats.syncPercentage
           })
         }
       }
+      
+      setSyncStatus(syncStatusMap)
       setDatabaseStats(dbStats)
+      
+      // Fetch network config and stats from first backend
+      const firstStatsAPI = backendStatsAPIs.get('alice')
+      if (firstStatsAPI) {
+        const config = await firstStatsAPI.getNetworkConfig()
+        if (config) {
+          setBackendNetworkConfig(config)
+        }
+        
+        const networkStats = await firstStatsAPI.getNetworkStats()
+        if (networkStats && networkStats.networkStats) {
+          setBackendNetworkStats(networkStats.networkStats)
+        }
+      }
       
       // Debug logging every 5 seconds
       if (Math.floor(engine.currentSimTime() / 5000) > Math.floor((engine.currentSimTime() - 100) / 5000)) {
@@ -243,20 +287,26 @@ function App() {
 
   const handleImagePercentageUpdate = (percentage: number) => {
     setImageAttachmentPercentage(percentage)
+    engine.setImageAttachmentPercentage(percentage)
   }
 
   const handleManualMessage = async (deviceId: string, content: string, attachments?: any[]) => {
-    // Add manual message to simulation timeline
-    // For now, combine content and attachment info into the message content
-    // In future phases, this will properly handle file chunks and content IDs
-    let messageContent = content
+    // Add manual message to simulation timeline with proper file attachments
+    console.log(`[App] Manual message from ${deviceId}: "${content}"${attachments ? ` with ${attachments.length} attachments` : ''}`)
+    
+    // Convert UI attachments to the format expected by createMessageEvent
+    let engineAttachments: any[] | undefined
     if (attachments && attachments.length > 0) {
-      const fileInfo = attachments.map(att => `[${att.name}]`).join(' ')
-      messageContent = content ? `${content} ${fileInfo}` : fileInfo
+      engineAttachments = attachments.map(att => ({
+        fileId: att.id || `manual-${Date.now()}`,
+        fileName: att.name,
+        mimeType: att.mimeType,
+        size: att.size,
+        chunkCount: Math.ceil(att.size / 500) // Estimate chunk count
+      }))
     }
     
-    console.log(`[App] Manual message from ${deviceId}: "${messageContent}"`)
-    await engine.createMessageEvent(deviceId, messageContent)
+    await engine.createMessageEvent(deviceId, content, undefined, engineAttachments)
     
     // Debug: Check database immediately after
     const db = engine.getDeviceDatabase(deviceId)
@@ -266,8 +316,16 @@ function App() {
     }
   }
 
-  const handleNetworkConfigUpdate = (config: any) => {
-    engine.updateNetworkConfig(config)
+  const handleNetworkConfigUpdate = async (config: any) => {
+    // Update all backend network configs
+    const promises = Array.from(backendStatsAPIs.values()).map(statsAPI => 
+      statsAPI.updateNetworkConfig(config)
+    )
+    
+    const results = await Promise.all(promises)
+    if (results.some(r => !r)) {
+      console.error('[App] Failed to update some backend network configs')
+    }
   }
 
   const handleScrollToArticle = () => {
@@ -277,11 +335,27 @@ function App() {
     }
   }
 
-  const handleToggleOnline = (deviceId: string, isOnline: boolean) => {
+  const handleToggleOnline = async (deviceId: string, isOnline: boolean) => {
     console.log(`[App] Setting ${deviceId} to ${isOnline ? 'online' : 'offline'}`)
     
-    // Update engine state
-    engine.setDeviceOnlineStatus(deviceId, isOnline)
+    // Update backend device status
+    const statsAPI = backendStatsAPIs.get(deviceId)
+    if (statsAPI) {
+      const success = await statsAPI.setDeviceStatus(isOnline)
+      if (!success) {
+        console.error(`[App] Failed to set ${deviceId} online status`)
+        return
+      }
+    }
+    
+    // Record to simulation engine
+    simulationEngineAPI.recordEvent({
+      type: 'device_status',
+      device: deviceId,
+      online: isOnline
+    }).catch(err => {
+      console.log('[App] Failed to record device status to simulation engine:', err)
+    })
     
     // Update frequencies state
     setFrequencies(prev => prev.map(freq => 
@@ -320,8 +394,8 @@ function App() {
           <section className="network-section">
             <NetworkEventLog
               networkEvents={networkEvents}
-              networkConfig={engine.getNetworkConfig()}
-              networkStats={engine.getNetworkStats()}
+              networkConfig={backendNetworkConfig}
+              networkStats={backendNetworkStats}
               onConfigUpdate={handleNetworkConfigUpdate}
             />
           </section>

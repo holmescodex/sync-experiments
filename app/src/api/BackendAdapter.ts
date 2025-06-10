@@ -1,5 +1,6 @@
 import { MessageAPI } from './MessageAPI'
 import { ChatAPI } from './ChatAPI'
+import { simulationEngineAPI } from './SimulationEngineAPI'
 
 export interface Message {
   id: string
@@ -34,6 +35,17 @@ export class BackendAdapter {
   }
 
   async sendMessage(content: string, attachments?: any[]): Promise<void> {
+    // Record to simulation engine (fire and forget)
+    simulationEngineAPI.recordEvent({
+      type: 'message',
+      device: this.deviceId,
+      content,
+      attachments,
+      source: 'manual'
+    }).catch(err => {
+      console.log('[BackendAdapter] Failed to record to simulation engine:', err)
+    })
+    
     if (this.messageAPI) {
       // Use backend API
       await this.messageAPI.sendMessage(content, attachments)
@@ -46,9 +58,13 @@ export class BackendAdapter {
   async getMessages(): Promise<Message[]> {
     if (this.messageAPI) {
       // Use backend API
+      console.log(`[BackendAdapter ${this.deviceId}] Fetching messages since ${this.lastSyncTime}`)
       const messages = await this.messageAPI.getMessages(this.lastSyncTime)
+      console.log(`[BackendAdapter ${this.deviceId}] Received ${messages.length} messages`)
+      
       if (messages.length > 0) {
         this.lastSyncTime = Math.max(...messages.map(m => m.timestamp))
+        console.log(`[BackendAdapter ${this.deviceId}] Updated lastSyncTime to ${this.lastSyncTime}`)
       }
       
       // Mark messages as own/received

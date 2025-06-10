@@ -1,6 +1,6 @@
 export interface SimulationEvent {
   simTime: number
-  type: 'message' | 'file' | 'device_join' | 'device_leave' | 'file_chunk'
+  type: 'message' | 'file' | 'device_join' | 'device_leave' | 'file_chunk' | 'reaction'
   deviceId: string
   data: any
   executed?: boolean
@@ -22,6 +22,7 @@ export interface DeviceFrequency {
 import { NetworkSimulator, type NetworkEvent, type NetworkConfig } from '../network/simulator'
 import { SyncManager } from '../sync/SyncManager'
 import { DeviceDB } from '../storage/device-db'
+import { FileChunkHandler, type FileMessageAttachment } from '../files/FileChunkHandler'
 // Crypto imports commented out for now
 // import { KeyManager } from '../crypto/KeyManager'
 // import { PacketSigner } from '../crypto/PacketSigner'
@@ -45,8 +46,10 @@ export class SimulationEngine {
   private deviceOfflineStatus: Map<string, boolean> = new Map()
   private networkSimulator: NetworkSimulator
   private totalGeneratedEvents = 0
+  private imageAttachmentPercentage = 30
   private syncManagers: Map<string, SyncManager> = new Map()
   private deviceDatabases: Map<string, DeviceDB> = new Map()
+  private fileChunkHandlers: Map<string, FileChunkHandler> = new Map()
   // Crypto infrastructure commented out for now
   // private keyManagers: Map<string, KeyManager> = new Map()
   // private packetSigners: Map<string, PacketSigner> = new Map()
@@ -60,7 +63,7 @@ export class SimulationEngine {
     
     // Set up network message delivery
     this.networkSimulator.onNetworkEvent((networkEvent: NetworkEvent) => {
-      if (networkEvent.status === 'delivered' && networkEvent.type === 'message') {
+      if (networkEvent.status === 'delivered') {
         // Skip if target device is offline
         if (this.deviceOfflineStatus.get(networkEvent.targetDevice)) {
           return
@@ -71,14 +74,15 @@ export class SimulationEngine {
           return
         }
         
-        // Only process regular message events with content
-        if (this.networkMessageCallback && networkEvent.payload.content) {
+        // Process regular message events with content
+        if (networkEvent.type === 'message' && this.networkMessageCallback && networkEvent.payload.content) {
           this.networkMessageCallback(
             networkEvent.targetDevice, 
             networkEvent.payload.content,
             networkEvent.sourceDevice
           )
         }
+        // Note: Reaction events are handled through the sync mechanism
       }
     })
   }
@@ -132,12 +136,35 @@ export class SimulationEngine {
 
   async createMessageEvent(deviceId: string, content: string, simTime?: number, attachments?: any[]) {
     const eventId = `msg-${deviceId}-${this.nextEventId++}`
+    const eventData: any = { content, eventId, attachments }
+    
+    // Manual messages should not get automatic file attachments
+    // File attachments for manual messages should be passed explicitly via the attachments parameter
+    // Automatic file generation only happens in generateUpcomingEvents() for simulation events
+    
     const event: SimulationEvent = {
       simTime: simTime ?? this.currentTime,
       type: 'message',
       deviceId,
       eventId,
-      data: { content, eventId, attachments }
+      data: eventData
+    }
+    this.eventTimeline.push(event)
+
+    // If event is for "now", execute immediately
+    if (event.simTime <= this.currentTime) {
+      await this.executeEvent(event)
+    }
+  }
+
+  async createReactionEvent(deviceId: string, messageId: string, emoji: string, remove: boolean = false, simTime?: number) {
+    const eventId = `react-${deviceId}-${this.nextEventId++}`
+    const event: SimulationEvent = {
+      simTime: simTime ?? this.currentTime,
+      type: 'reaction',
+      deviceId,
+      eventId,
+      data: { messageId, emoji, remove, eventId, author: deviceId }
     }
     this.eventTimeline.push(event)
 
@@ -184,6 +211,10 @@ export class SimulationEngine {
     return [...this.deviceFrequencies]
   }
 
+  setImageAttachmentPercentage(percentage: number) {
+    this.imageAttachmentPercentage = percentage
+  }
+
   getUpcomingEvents(count: number = 10): SimulationEvent[] {
     return this.eventTimeline
       .filter(e => !e.executed && e.simTime >= this.currentTime)
@@ -209,16 +240,23 @@ export class SimulationEngine {
       
       while (nextEventTime < endTime) {
         const eventId = `msg-${freq.deviceId}-${this.nextEventId++}`
+        const eventData: any = { 
+          content: this.generateRandomMessage(),
+          simulation_event_id: this.nextEventId,
+          eventId
+        }
+        
+        // Add file intent if percentage chance is met
+        if (Math.random() < (this.imageAttachmentPercentage / 100)) {
+          eventData.fileIntent = this.generateRandomFileIntent()
+        }
+        
         this.eventTimeline.push({
           simTime: nextEventTime,
           type: 'message',
           deviceId: freq.deviceId,
           eventId,
-          data: { 
-            content: this.generateRandomMessage(),
-            simulation_event_id: this.nextEventId,
-            eventId
-          }
+          data: eventData
         })
         // Don't increment totalGeneratedEvents here - only when executed
         
@@ -265,6 +303,39 @@ export class SimulationEngine {
     return messages[Math.floor(Math.random() * messages.length)]
   }
 
+  private generateRandomFileIntent(): {name: string, size: number, type: string} {
+    // Pool of test images with realistic file sizes
+    const testFiles = [
+      { name: 'landscape.jpg', size: 45000, type: 'image/jpeg' },
+      { name: 'portrait.jpg', size: 32000, type: 'image/jpeg' },
+      { name: 'abstract.jpg', size: 78000, type: 'image/jpeg' },
+      { name: 'diagram.png', size: 156000, type: 'image/png' },
+      { name: 'small.jpg', size: 18000, type: 'image/jpeg' },
+      { name: 'landscape-large.jpg', size: 235000, type: 'image/jpeg' },
+      { name: 'large.jpg', size: 189000, type: 'image/jpeg' }
+    ]
+
+    return testFiles[Math.floor(Math.random() * testFiles.length)]
+  }
+
+  private async processFileIntent(deviceId: string, fileIntent: {name: string, size: number, type: string}): Promise<FileMessageAttachment | null> {
+    const fileChunkHandler = this.fileChunkHandlers.get(deviceId)
+    if (!fileChunkHandler) return null
+    
+    // Create simulated file data (for demo - in reality would load from filesystem)
+    const fileData = new Uint8Array(fileIntent.size).map(() => Math.floor(Math.random() * 256))
+    
+    try {
+      // Process file through FileChunkHandler - this creates chunks and stores them
+      const attachment = await fileChunkHandler.uploadFile(fileData, fileIntent.type, fileIntent.name)
+      console.log(`[SimulationEngine] Processed file attachment: ${fileIntent.name} (${fileIntent.size} bytes, ${attachment.chunkCount} chunks)`)
+      return attachment
+    } catch (error) {
+      console.warn(`[SimulationEngine] Failed to process file attachment:`, error)
+      return null
+    }
+  }
+
   private async executeEventsUpToTime(targetTime: number) {
     const eventsToExecute = this.eventTimeline.filter(e => 
       e.simTime <= targetTime && !e.executed
@@ -299,7 +370,7 @@ export class SimulationEngine {
     this.networkSimulator.trackOwnEvent(event.deviceId)
     
     // Store event in the device's local database
-    if (event.type === 'message' && event.eventId) {
+    if ((event.type === 'message' || event.type === 'reaction') && event.eventId) {
       let encrypted: Uint8Array | null = null
       
       // Pass plaintext event to device - let the device handle encryption
@@ -309,14 +380,37 @@ export class SimulationEngine {
       if (db) {
         try {
           // For now, do simple encoding until we implement proper crypto in DeviceDB
-          const payload = JSON.stringify({
-            type: 'message',
-            content: event.data.content,
-            timestamp: event.simTime,
-            author: event.deviceId,
-            attachments: event.data.attachments
-          })
-          encrypted = new TextEncoder().encode(payload)
+          let payload: any
+          if (event.type === 'message') {
+            // Process file intent if present
+            let attachments = event.data.attachments
+            if (!attachments && event.data.fileIntent) {
+              const fileAttachment = await this.processFileIntent(event.deviceId, event.data.fileIntent)
+              if (fileAttachment) {
+                attachments = [fileAttachment]
+                // Update the event data for UI display
+                event.data.attachments = attachments
+              }
+            }
+            
+            payload = {
+              type: 'message',
+              content: event.data.content,
+              timestamp: event.simTime,
+              author: event.deviceId,
+              attachments
+            }
+          } else if (event.type === 'reaction') {
+            payload = {
+              type: 'reaction',
+              messageId: event.data.messageId,
+              emoji: event.data.emoji,
+              remove: event.data.remove,
+              timestamp: event.simTime,
+              author: event.data.author
+            }
+          }
+          encrypted = new TextEncoder().encode(JSON.stringify(payload))
           
           const insertedEventId = await db.insertEvent({
             device_id: event.deviceId,
@@ -340,16 +434,30 @@ export class SimulationEngine {
       
       // Only broadcast if device is online and we have encrypted data
       if (!this.deviceOfflineStatus.get(event.deviceId) && encrypted) {
-        // Broadcast the message directly to all peers for immediate delivery
+        // Broadcast the event directly to all peers for immediate delivery
         // This works alongside Bloom filter sync for better real-time performance
-        this.networkSimulator.broadcastEvent(event.deviceId, 'message', {
-          content: event.data.content,
-          eventId: event.eventId,
-          timestamp: event.simTime,
-          author: event.deviceId,
-          attachments: event.data.attachments,
-          encrypted: Array.from(encrypted)
-        })
+        let broadcastPayload: any
+        if (event.type === 'message') {
+          broadcastPayload = {
+            content: event.data.content,
+            eventId: event.eventId,
+            timestamp: event.simTime,
+            author: event.deviceId,
+            attachments: event.data.attachments,
+            encrypted: Array.from(encrypted)
+          }
+        } else if (event.type === 'reaction') {
+          broadcastPayload = {
+            messageId: event.data.messageId,
+            emoji: event.data.emoji,
+            remove: event.data.remove,
+            eventId: event.eventId,
+            timestamp: event.simTime,
+            author: event.data.author,
+            encrypted: Array.from(encrypted)
+          }
+        }
+        this.networkSimulator.broadcastEvent(event.deviceId, event.type, broadcastPayload)
       }
     }
   }
@@ -413,6 +521,10 @@ export class SimulationEngine {
       })
       
       this.syncManagers.set(deviceId, syncManager)
+      
+      // Initialize file chunk handler
+      const fileChunkHandler = new FileChunkHandler(deviceId, db, this.networkSimulator)
+      this.fileChunkHandlers.set(deviceId, fileChunkHandler)
     }
   }
 

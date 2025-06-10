@@ -19,7 +19,7 @@ export function NetworkEventLog({
   networkConfig,
   onConfigUpdate 
 }: NetworkEventLogProps) {
-  const [showBloomEvents, setShowBloomEvents] = useState(false)
+  const [showBloomEvents, setShowBloomEvents] = useState(true)
   const [showFileEvents, setShowFileEvents] = useState(true)
   const [showMessageEvents, setShowMessageEvents] = useState(true)
   const [displayLimit, setDisplayLimit] = useState(50)
@@ -274,8 +274,8 @@ export function NetworkEventLog({
                     )
                   ) : event.type === 'bloom_filter' ? (
                     <span className="bloom-details">
-                      🌸 Bloom filter: {event.payload.eventCount || 0} events, 
-                      {event.payload.filterSize || 0} bytes
+                      🌸 Bloom filter from {event.payload.deviceId || 'unknown'} 
+                      {event.payload.bloom ? ` (${event.payload.bloom.length} bytes)` : ''}
                     </span>
                   ) : (
                     <span className="technical-payload">

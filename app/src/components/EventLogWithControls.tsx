@@ -145,7 +145,7 @@ export function EventLogWithControls({
           </div>
           <div className="device-toggles">
             {frequencies.map(freq => (
-              <label key={freq.deviceId} className="device-toggle">
+              <label key={freq.deviceId} className="device-toggle" data-testid={`device-controls-${freq.deviceId}`}>
                 <input
                   type="checkbox"
                   checked={freq.enabled}
@@ -177,7 +177,21 @@ export function EventLogWithControls({
                   {event.deviceId}
                 </span>
                 <span className="event-message">
-                  {event.type === 'message' ? event.data.content : `${event.type} event`}
+                  {event.type === 'message' ? (
+                    <>
+                      {event.data.content}
+                      {event.data.attachments && event.data.attachments.length > 0 && (
+                        <span className="attachment-indicator">
+                          📎 {event.data.attachments.length} file{event.data.attachments.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {event.data.fileIntent && (
+                        <span className="file-intent-indicator">
+                          🖼️ {event.data.fileIntent.name}
+                        </span>
+                      )}
+                    </>
+                  ) : `${event.type} event`}
                 </span>
               </div>
             </div>
@@ -198,7 +212,21 @@ export function EventLogWithControls({
                   {event.deviceId}
                 </span>
                 <span className="event-message">
-                  {event.type === 'message' ? event.data.content : `${event.type} event`}
+                  {event.type === 'message' ? (
+                    <>
+                      {event.data.content}
+                      {event.data.attachments && event.data.attachments.length > 0 && (
+                        <span className="attachment-indicator">
+                          📎 {event.data.attachments.length} file{event.data.attachments.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {event.data.fileIntent && (
+                        <span className="file-intent-indicator">
+                          🖼️ {event.data.fileIntent.name}
+                        </span>
+                      )}
+                    </>
+                  ) : `${event.type} event`}
                 </span>
               </div>
             </div>
