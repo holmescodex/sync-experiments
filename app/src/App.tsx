@@ -33,11 +33,21 @@ function App() {
   const [databaseStats, setDatabaseStats] = useState<Map<string, { eventCount: number, syncPercentage: number }>>(new Map())
   const [showIndicator, setShowIndicator] = useState(true)
   const [backendNetworkAPI] = useState(() => new BackendNetworkAPI())
-  const [backendStatsAPIs] = useState(() => new Map<string, BackendStatsAPI>([
-    ['alice', new BackendStatsAPI(import.meta.env.VITE_ALICE_BACKEND_URL || 'http://localhost:3001')],
-    ['bob', new BackendStatsAPI(import.meta.env.VITE_BOB_BACKEND_URL || 'http://localhost:3002')]
-  ]))
-  const [simulationControlAPI] = useState(() => new SimulationControlAPI(import.meta.env.VITE_SIMULATION_CONTROL_URL || 'http://localhost:3005'))
+  const [backendStatsAPIs] = useState(() => {
+    const apis = new Map<string, BackendStatsAPI>()
+    if (import.meta.env.VITE_ALICE_BACKEND_URL) {
+      apis.set('alice', new BackendStatsAPI(import.meta.env.VITE_ALICE_BACKEND_URL))
+    }
+    if (import.meta.env.VITE_BOB_BACKEND_URL) {
+      apis.set('bob', new BackendStatsAPI(import.meta.env.VITE_BOB_BACKEND_URL))
+    }
+    return apis
+  })
+  const [simulationControlAPI] = useState(() => {
+    return import.meta.env.VITE_SIMULATION_CONTROL_URL 
+      ? new SimulationControlAPI(import.meta.env.VITE_SIMULATION_CONTROL_URL)
+      : null
+  })
   const [backendNetworkConfig, setBackendNetworkConfig] = useState<NetworkConfig>({ 
     packetLossRate: 0, 
     minLatency: 10, 
@@ -58,28 +68,42 @@ function App() {
   useEffect(() => {
     // Initialize backend adapters and simulation control
     const initBackendAdapters = async () => {
+      // Log environment variables for debugging
+      console.log('[App] Environment variables:')
+      console.log('  VITE_ALICE_BACKEND_URL:', import.meta.env.VITE_ALICE_BACKEND_URL)
+      console.log('  VITE_BOB_BACKEND_URL:', import.meta.env.VITE_BOB_BACKEND_URL)
+      console.log('  VITE_SIMULATION_CONTROL_URL:', import.meta.env.VITE_SIMULATION_CONTROL_URL)
+      
       const adapters = new Map<string, BackendAdapter>()
       
       // Try to connect to backend servers
       try {
-        // Check if alice backend is available
-        const aliceBackendUrl = import.meta.env.VITE_ALICE_BACKEND_URL || 'http://localhost:3001'
-        const aliceResponse = await fetch(`${aliceBackendUrl}/api/health`).catch(() => null)
-        if (aliceResponse?.ok) {
-          console.log('[App] Alice backend detected at', aliceBackendUrl)
-          adapters.set('alice', new BackendAdapter('alice', aliceBackendUrl))
+        // Check if alice backend is available - ONLY use orchestrator-provided URL
+        const aliceBackendUrl = import.meta.env.VITE_ALICE_BACKEND_URL
+        if (aliceBackendUrl) {
+          const aliceResponse = await fetch(`${aliceBackendUrl}/api/health`).catch(() => null)
+          if (aliceResponse?.ok) {
+            console.log('[App] Alice backend detected at', aliceBackendUrl)
+            adapters.set('alice', new BackendAdapter('alice', aliceBackendUrl))
+          } else {
+            console.log('[App] Alice backend not responding at', aliceBackendUrl)
+          }
         } else {
-          console.log('[App] Alice backend not available at', aliceBackendUrl)
+          console.log('[App] VITE_ALICE_BACKEND_URL not provided by orchestrator')
         }
         
-        // Check if bob backend is available
-        const bobBackendUrl = import.meta.env.VITE_BOB_BACKEND_URL || 'http://localhost:3002'
-        const bobResponse = await fetch(`${bobBackendUrl}/api/health`).catch(() => null)
-        if (bobResponse?.ok) {
-          console.log('[App] Bob backend detected at', bobBackendUrl)
-          adapters.set('bob', new BackendAdapter('bob', bobBackendUrl))
+        // Check if bob backend is available - ONLY use orchestrator-provided URL
+        const bobBackendUrl = import.meta.env.VITE_BOB_BACKEND_URL
+        if (bobBackendUrl) {
+          const bobResponse = await fetch(`${bobBackendUrl}/api/health`).catch(() => null)
+          if (bobResponse?.ok) {
+            console.log('[App] Bob backend detected at', bobBackendUrl)
+            adapters.set('bob', new BackendAdapter('bob', bobBackendUrl))
+          } else {
+            console.log('[App] Bob backend not responding at', bobBackendUrl)
+          }
         } else {
-          console.log('[App] Bob backend not available at', bobBackendUrl)
+          console.log('[App] VITE_BOB_BACKEND_URL not provided by orchestrator')
         }
       } catch (error) {
         // Better error handling with meaningful messages
@@ -94,31 +118,35 @@ function App() {
       console.log('[App] Backend adapters initialized:', Array.from(adapters.entries()).map(([id, adapter]) => `${id}: ${adapter.getBackendType()}`))
       
       // Initialize simulation control if available
-      try {
-        const simHealthy = await simulationControlAPI.health()
-        if (simHealthy) {
-          console.log('[App] Simulation control backend detected')
-          
-          // Load current configuration
-          const config = await simulationControlAPI.getConfig()
-          setGlobalMessagesPerHour(config.globalMessagesPerHour)
-          setImageAttachmentPercentage(config.imageAttachmentPercentage)
-          setSpeedMultiplier(config.simulationSpeed)
-          setIsRunning(config.isRunning)
-          
-          // Update device states
-          const updatedFrequencies = frequencies.map(freq => ({
-            ...freq,
-            enabled: config.enabledDevices.includes(freq.deviceId)
-          }))
-          setFrequencies(updatedFrequencies)
-          
-          console.log('[App] Loaded simulation config from backend:', config)
-        } else {
-          console.log('[App] Simulation control backend not available')
+      if (simulationControlAPI) {
+        try {
+          const simHealthy = await simulationControlAPI.health()
+          if (simHealthy) {
+            console.log('[App] Simulation control backend detected')
+            
+            // Load current configuration
+            const config = await simulationControlAPI.getConfig()
+            setGlobalMessagesPerHour(config.globalMessagesPerHour)
+            setImageAttachmentPercentage(config.imageAttachmentPercentage)
+            setSpeedMultiplier(config.simulationSpeed)
+            setIsRunning(config.isRunning)
+            
+            // Update device states
+            const updatedFrequencies = frequencies.map(freq => ({
+              ...freq,
+              enabled: config.enabledDevices.includes(freq.deviceId)
+            }))
+            setFrequencies(updatedFrequencies)
+            
+            console.log('[App] Loaded simulation config from backend:', config)
+          } else {
+            console.log('[App] Simulation control backend not available')
+          }
+        } catch (error) {
+          console.warn('[App] Could not connect to simulation control backend:', error)
         }
-      } catch (error) {
-        console.warn('[App] Could not connect to simulation control backend:', error)
+      } else {
+        console.log('[App] No simulation control URL provided by orchestrator')
       }
     }
     
@@ -250,11 +278,13 @@ function App() {
     setIsRunning(false)
     
     // Pause simulation in backend
-    try {
-      await simulationControlAPI.pause()
-      console.log('[App] Paused simulation control backend')
-    } catch (error) {
-      console.error('[App] Failed to pause simulation:', error)
+    if (simulationControlAPI) {
+      try {
+        await simulationControlAPI.pause()
+        console.log('[App] Paused simulation control backend')
+      } catch (error) {
+        console.error('[App] Failed to pause simulation:', error)
+      }
     }
   }
 
@@ -263,11 +293,13 @@ function App() {
     setIsRunning(true)
     
     // Resume simulation in backend
-    try {
-      await simulationControlAPI.start()
-      console.log('[App] Started simulation control backend')
-    } catch (error) {
-      console.error('[App] Failed to start simulation:', error)
+    if (simulationControlAPI) {
+      try {
+        await simulationControlAPI.start()
+        console.log('[App] Started simulation control backend')
+      } catch (error) {
+        console.error('[App] Failed to start simulation:', error)
+      }
     }
   }
 
@@ -276,11 +308,13 @@ function App() {
     setSpeedMultiplier(speed)
     
     // Update speed in backend
-    try {
-      await simulationControlAPI.setSpeed(speed)
-      console.log(`[App] Updated simulation speed to ${speed}x`)
-    } catch (error) {
-      console.error('[App] Failed to update simulation speed:', error)
+    if (simulationControlAPI) {
+      try {
+        await simulationControlAPI.setSpeed(speed)
+        console.log(`[App] Updated simulation speed to ${speed}x`)
+      } catch (error) {
+        console.error('[App] Failed to update simulation speed:', error)
+      }
     }
   }
 
@@ -289,12 +323,16 @@ function App() {
     for (const [deviceId, adapter] of backendAdapters) {
       if (adapter.getBackendType() === 'api') {
         try {
-          // Clear backend database
+          // Clear backend database - use orchestrator-provided URLs only
           const backendUrl = deviceId === 'alice' 
-            ? (import.meta.env.VITE_ALICE_BACKEND_URL || 'http://localhost:3001')
-            : (import.meta.env.VITE_BOB_BACKEND_URL || 'http://localhost:3002')
-          await fetch(`${backendUrl}/api/messages/clear`, { method: 'DELETE' })
-          console.log(`[App] Cleared backend database for ${deviceId}`)
+            ? import.meta.env.VITE_ALICE_BACKEND_URL
+            : import.meta.env.VITE_BOB_BACKEND_URL
+          if (backendUrl) {
+            await fetch(`${backendUrl}/api/messages/clear`, { method: 'DELETE' })
+            console.log(`[App] Cleared backend database for ${deviceId}`)
+          } else {
+            console.warn(`[App] No backend URL for ${deviceId}, cannot clear database`)
+          }
         } catch (error) {
           console.warn(`[App] Failed to clear backend for ${deviceId}:`, error)
         }
@@ -320,12 +358,14 @@ function App() {
     setFrequencies(newFrequencies)
     
     // Update device enable/disable states in simulation control backend
-    for (const freq of newFrequencies) {
-      try {
-        await simulationControlAPI.setDeviceEnabled(freq.deviceId, freq.enabled)
-        console.log(`[App] Updated ${freq.deviceId} enabled state to ${freq.enabled}`)
-      } catch (error) {
-        console.error(`[App] Failed to update ${freq.deviceId} enabled state:`, error)
+    if (simulationControlAPI) {
+      for (const freq of newFrequencies) {
+        try {
+          await simulationControlAPI.setDeviceEnabled(freq.deviceId, freq.enabled)
+          console.log(`[App] Updated ${freq.deviceId} enabled state to ${freq.enabled}`)
+        } catch (error) {
+          console.error(`[App] Failed to update ${freq.deviceId} enabled state:`, error)
+        }
       }
     }
   }
@@ -334,15 +374,17 @@ function App() {
     setGlobalMessagesPerHour(rate)
     
     // Update global rate in simulation control backend
-    try {
-      await simulationControlAPI.setGlobalMessageRate(rate)
-      console.log(`[App] Updated global message rate to ${rate} msg/hr`)
-    } catch (error) {
-      console.error('[App] Failed to update global message rate:', error)
-      // Show error to user
-      if (error instanceof Error && error.message.includes('Maximum 1000 messages/hour')) {
-        // Could show a toast or alert here
-        setGlobalMessagesPerHour(1000) // Cap at maximum
+    if (simulationControlAPI) {
+      try {
+        await simulationControlAPI.setGlobalMessageRate(rate)
+        console.log(`[App] Updated global message rate to ${rate} msg/hr`)
+      } catch (error) {
+        console.error('[App] Failed to update global message rate:', error)
+        // Show error to user
+        if (error instanceof Error && error.message.includes('Maximum 1000 messages/hour')) {
+          // Could show a toast or alert here
+          setGlobalMessagesPerHour(1000) // Cap at maximum
+        }
       }
     }
   }
@@ -352,11 +394,13 @@ function App() {
     engine.setImageAttachmentPercentage(percentage) // Keep local engine in sync
     
     // Update attachment rate in simulation control backend
-    try {
-      await simulationControlAPI.setGlobalAttachmentRate(percentage)
-      console.log(`[App] Updated global attachment rate to ${percentage}%`)
-    } catch (error) {
-      console.error('[App] Failed to update attachment rate:', error)
+    if (simulationControlAPI) {
+      try {
+        await simulationControlAPI.setGlobalAttachmentRate(percentage)
+        console.log(`[App] Updated global attachment rate to ${percentage}%`)
+      } catch (error) {
+        console.error('[App] Failed to update attachment rate:', error)
+      }
     }
   }
 

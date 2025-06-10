@@ -41,10 +41,16 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
 
     // Subscribe to backend message updates
     useEffect(() => {
-      if (!backendAdapter) return
+      if (!backendAdapter) {
+        console.log(`[ChatInterface ${deviceId}] No backend adapter available`)
+        return
+      }
+      
+      console.log(`[ChatInterface ${deviceId}] Starting message polling with backend adapter`)
       
       // Poll backend for messages
       backendAdapter.startPolling((newMessages) => {
+        console.log(`[ChatInterface ${deviceId}] Received ${newMessages.length} new messages from backend`)
         setMessages(prevMessages => {
           // Convert backend messages to our Message format
           const convertedMessages: Message[] = newMessages.map(msg => ({
@@ -71,8 +77,11 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
             messageMap.set(msg.id, msg)
           })
           
+          const finalMessages = Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp)
+          console.log(`[ChatInterface ${deviceId}] Total messages after update: ${finalMessages.length}`)
+          
           // Return all messages sorted by timestamp
-          return Array.from(messageMap.values()).sort((a, b) => a.timestamp - b.timestamp)
+          return finalMessages
         })
       })
       
