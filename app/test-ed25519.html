@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Ed25519</title>
+</head>
+<body>
+    <h1>Ed25519 Library Test</h1>
+    <div id="output"></div>
+    
+    <script type="module">
+        import * as ed from '@noble/ed25519';
+        
+        const output = document.getElementById('output');
+        
+        async function test() {
+            try {
+                output.innerHTML += '<p>Testing @noble/ed25519...</p>';
+                
+                // Generate a random private key
+                const privateKey = new Uint8Array(32);
+                crypto.getRandomValues(privateKey);
+                output.innerHTML += '<p>✓ Generated private key</p>';
+                
+                // Get public key
+                const publicKey = await ed.getPublicKey(privateKey);
+                output.innerHTML += '<p>✓ Generated public key</p>';
+                
+                // Sign a message
+                const message = new TextEncoder().encode('Hello, World!');
+                const signature = await ed.sign(message, privateKey);
+                output.innerHTML += '<p>✓ Signed message</p>';
+                
+                // Verify signature
+                const isValid = await ed.verify(signature, message, publicKey);
+                output.innerHTML += `<p>✓ Signature verified: ${isValid}</p>`;
+                
+                output.innerHTML += '<p style="color: green; font-weight: bold;">All tests passed!</p>';
+                
+            } catch (error) {
+                output.innerHTML += `<p style="color: red;">Error: ${error.message}</p>`;
+                console.error(error);
+            }
+        }
+        
+        test();
+    </script>
+</body>
+</html>

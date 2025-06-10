@@ -9,7 +9,7 @@ describe('Direct Message Delivery Tests', () => {
     engine = new SimulationEngine()
     
     // Initialize devices with zero frequency (manual messages only)
-    engine.setDeviceFrequencies([
+    await engine.setDeviceFrequencies([
       { deviceId: 'alice', messagesPerHour: 0, enabled: false },
       { deviceId: 'bob', messagesPerHour: 0, enabled: false }
     ])
@@ -22,9 +22,16 @@ describe('Direct Message Delivery Tests', () => {
       jitter: 10
     })
     
-    // Start the engine to initialize databases and sync
-    engine.start()
-    await engine.tick() // Initial tick to set up
+    // The engine starts running by default
+    // Initial tick to set up databases and sync
+    await engine.tick()
+    
+    // Verify databases are initialized
+    const aliceDB = engine.getDeviceDatabase('alice')
+    const bobDB = engine.getDeviceDatabase('bob')
+    if (!aliceDB || !bobDB) {
+      throw new Error('Failed to initialize device databases')
+    }
   })
 
   it('should deliver messages directly without bloom sync', async () => {

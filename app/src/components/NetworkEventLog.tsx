@@ -16,13 +16,13 @@ interface NetworkEventLogProps {
 
 export function NetworkEventLog({ 
   networkEvents, 
-  networkConfig, 
-  networkStats,
+  networkConfig,
   onConfigUpdate 
 }: NetworkEventLogProps) {
   const [showBloomEvents, setShowBloomEvents] = useState(false)
   const [showFileEvents, setShowFileEvents] = useState(true)
   const [showMessageEvents, setShowMessageEvents] = useState(true)
+  const [displayLimit, setDisplayLimit] = useState(50)
 
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000)
@@ -160,19 +160,19 @@ export function NetworkEventLog({
       <div className="network-stats">
         <div className="stat-item">
           <span className="stat-label">Packets</span>
-          <span className="stat-value">{networkStats.total}</span>
+          <span className="stat-value">{filteredStats.total}</span>
         </div>
         <div className="stat-item">
           <span className="stat-label">Delivered</span>
-          <span className="stat-value delivered">{networkStats.delivered}</span>
+          <span className="stat-value delivered">{filteredStats.delivered}</span>
         </div>
         <div className="stat-item">
           <span className="stat-label">Dropped</span>
-          <span className="stat-value dropped">{networkStats.dropped}</span>
+          <span className="stat-value dropped">{filteredStats.dropped}</span>
         </div>
         <div className="stat-item">
           <span className="stat-label">Success Rate</span>
-          <span className="stat-value">{Math.round(networkStats.deliveryRate * 100)}%</span>
+          <span className="stat-value">{Math.round(filteredStats.deliveryRate * 100)}%</span>
         </div>
       </div>
 
@@ -210,7 +210,17 @@ export function NetworkEventLog({
       {/* Network Events List */}
       <div className="network-events">
         <div className="events-header">
-          <span>Network Events ({filteredEvents.length})</span>
+          <span>Network Events ({filteredEvents.length} total, showing {Math.min(displayLimit, filteredEvents.length)})</span>
+          <select 
+            className="display-limit-select"
+            value={displayLimit} 
+            onChange={(e) => setDisplayLimit(Number(e.target.value))}
+          >
+            <option value={50}>Show 50</option>
+            <option value={100}>Show 100</option>
+            <option value={500}>Show 500</option>
+            <option value={1000}>Show 1000</option>
+          </select>
         </div>
         <div className="events-list">
           {filteredEvents.length === 0 ? (
@@ -219,7 +229,7 @@ export function NetworkEventLog({
               <small>Events will appear as devices communicate</small>
             </div>
           ) : (
-            filteredEvents.slice(0, 50).map((event) => (
+            filteredEvents.slice(0, displayLimit).map((event) => (
               <div key={event.id} className="network-event">
                 <div className="event-header">
                   <span className="event-icon">{getEventIcon(event.type)}</span>

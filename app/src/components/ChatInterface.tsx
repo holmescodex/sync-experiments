@@ -1,5 +1,16 @@
 import { useState, useEffect, forwardRef, useImperativeHandle, useRef } from 'react'
 import type { ChatAPI, ChatMessage } from '../api/ChatAPI'
+import { BackendAdapter } from '../api/BackendAdapter'
+// Image compression moved to backend
+
+// Utility function for formatting file sizes
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
 
 interface FileAttachment {
   id: string
@@ -11,6 +22,9 @@ interface FileAttachment {
   mimeType: string
   loadingState?: 'pending' | 'loading' | 'loaded' | 'error'
   loadingProgress?: number
+  originalSize?: number
+  compressed?: boolean
+  compressionRatio?: number
 }
 
 interface Message {
@@ -30,7 +44,10 @@ interface ChatInterfaceProps {
   imageAttachmentPercentage: number
   onManualMessage: (deviceId: string, content: string, attachments?: FileAttachment[]) => void
   chatAPI?: ChatAPI | null
+  backendAdapter?: BackendAdapter
   databaseStats?: { eventCount: number, syncPercentage: number }
+  isOnline?: boolean
+  onToggleOnline?: (deviceId: string, isOnline: boolean) => void
 }
 
 export interface ChatInterfaceRef {
@@ -38,7 +55,7 @@ export interface ChatInterfaceRef {
 }
 
 export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
-  ({ deviceId, currentSimTime, syncStatus, imageAttachmentPercentage, onManualMessage, chatAPI, databaseStats }, ref) => {
+  ({ deviceId, currentSimTime, syncStatus, imageAttachmentPercentage, onManualMessage, chatAPI, backendAdapter, databaseStats, isOnline = true, onToggleOnline }, ref) => {
     const [messages, setMessages] = useState<Message[]>([])
     const [inputValue, setInputValue] = useState('')
     const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([])
@@ -47,16 +64,30 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
 
     // Subscribe to ChatAPI updates
     useEffect(() => {
-      if (!chatAPI) return
-      
-      // Subscribe to all message updates
-      const unsubscribe = chatAPI.onMessagesUpdate((apiMessages: ChatMessage[]) => {
-        // Convert ChatAPI messages to our Message format
-        const convertedMessages: Message[] = apiMessages.map(msg => ({
-          id: msg.id,
-          content: msg.content,
-          timestamp: msg.timestamp,
-          isOwn: msg.isOwn,
+      // Use backend adapter if available, otherwise fall back to chatAPI
+      if (backendAdapter) {
+        // Poll backend for messages
+        backendAdapter.startPolling((newMessages) => {
+          setMessages(prevMessages => {
+            // Merge new messages, avoiding duplicates
+            const existingIds = new Set(prevMessages.map(m => m.id))
+            const uniqueNewMessages = newMessages.filter(m => !existingIds.has(m.id))
+            return [...prevMessages, ...uniqueNewMessages]
+          })
+        })
+        
+        return () => {
+          backendAdapter.stopPolling()
+        }
+      } else if (chatAPI) {
+        // Use local chatAPI
+        const unsubscribe = chatAPI.onMessagesUpdate((apiMessages: ChatMessage[]) => {
+          // Convert ChatAPI messages to our Message format
+          const convertedMessages: Message[] = apiMessages.map(msg => ({
+            id: msg.id,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            isOwn: msg.isOwn,
           author: msg.author,
           fromSimulation: !msg.isOwn,
           attachments: msg.attachments
@@ -67,7 +98,8 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
       return () => {
         unsubscribe()
       }
-    }, [chatAPI])
+      }
+    }, [chatAPI, backendAdapter])
 
     // Auto-scroll to bottom when messages change
     useEffect(() => {
@@ -107,19 +139,42 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
       }
     }))
 
-    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
       const files = event.target.files
       if (!files) return
 
-      const newAttachments: FileAttachment[] = Array.from(files).map(file => ({
-        id: `file-${Date.now()}-${Math.random()}`,
-        type: file.type.startsWith('image/') ? 'image' : 'document',
-        name: file.name,
-        size: file.size,
-        url: `/test-images/${getTestImageForFile(file)}`, // Placeholder URL
-        mimeType: file.type,
-        loadingState: 'loaded'
-      }))
+      // Convert files to attachments with compression
+      const newAttachments: FileAttachment[] = []
+      
+      for (const file of Array.from(files)) {
+        const attachment: FileAttachment = {
+          id: `file-${Date.now()}-${Math.random()}`,
+          type: file.type.startsWith('image/') ? 'image' : 'document',
+          name: file.name,
+          size: file.size,
+          originalSize: file.size,
+          url: URL.createObjectURL(file),
+          mimeType: file.type,
+          loadingState: 'loading',
+          compressed: false
+        }
+        
+        newAttachments.push(attachment)
+        
+        // File processing moved to backend - just mark as loaded
+        try {
+          // TODO: Send file to backend for compression and processing
+          attachment.loadingState = 'loaded'
+          
+          // Trigger re-render
+          setSelectedFiles(prev => [...prev])
+          
+        } catch (error) {
+          console.error('Error processing file:', error)
+          attachment.loadingState = 'error'
+          setSelectedFiles(prev => [...prev])
+        }
+      }
 
       setSelectedFiles(prev => [...prev, ...newAttachments])
       
@@ -142,14 +197,27 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
       setSelectedFiles(prev => prev.filter(f => f.id !== fileId))
     }
 
-    const handleSendMessage = () => {
+    const handleSendMessage = async () => {
       if (!inputValue.trim() && selectedFiles.length === 0) return
       
-      // Only notify the parent - don't add message locally
-      // The message will come back through the simulation engine
-      onManualMessage(deviceId, inputValue.trim(), selectedFiles.length > 0 ? selectedFiles : undefined)
-      setInputValue('')
-      setSelectedFiles([])
+      const content = inputValue.trim()
+      const files = selectedFiles.length > 0 ? selectedFiles : undefined
+      
+      // If using backend adapter, send directly through API
+      if (backendAdapter) {
+        try {
+          await backendAdapter.sendMessage(content, files)
+          setInputValue('')
+          setSelectedFiles([])
+        } catch (error) {
+          console.error('Failed to send message:', error)
+        }
+      } else {
+        // Otherwise use the simulation engine
+        onManualMessage(deviceId, content, files)
+        setInputValue('')
+        setSelectedFiles([])
+      }
     }
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -174,8 +242,10 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
           <div className="device-info">
             <h4>{deviceId}</h4>
             <div className="status-indicators">
-              <span className="status-indicator online">● Online</span>
-              {syncStatus && (
+              <span className={`status-indicator ${isOnline ? 'online' : 'offline'}`}>
+                ● {isOnline ? 'Online' : 'Offline'}
+              </span>
+              {syncStatus && isOnline && (
                 <span 
                   className={`status-indicator sync ${syncStatus.isSynced ? 'synced' : 'syncing'}`}
                   data-testid="sync-indicator"
@@ -281,7 +351,24 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
                   )}
                   <div className="file-preview-info">
                     <span className="file-preview-name">{file.name}</span>
-                    <small className="file-preview-size">{Math.round(file.size / 1024)}KB</small>
+                    <div className="file-preview-details">
+                      <small className="file-preview-size">
+                        {formatFileSize(file.size)}
+                        {file.compressed && file.originalSize && (
+                          <span className="compression-info">
+                            {' '}(was {formatFileSize(file.originalSize)})
+                          </span>
+                        )}
+                      </small>
+                      {file.loadingState === 'loading' && (
+                        <small className="compression-status">Compressing...</small>
+                      )}
+                      {file.compressed && file.compressionRatio && (
+                        <small className="compression-status">
+                          Compressed {Math.round((1 - file.compressionRatio) * 100)}%
+                        </small>
+                      )}
+                    </div>
                   </div>
                   <button 
                     className="file-remove-btn"
@@ -335,16 +422,31 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
         {/* Database Activity Panel */}
         {databaseStats && (
           <div className="database-activity">
-            <div className="db-stat">
-              <span className="db-icon">💾</span>
-              <span className="db-label">Events:</span>
-              <span className="db-value">{databaseStats.eventCount}</span>
+            <div className="db-stats">
+              <div className="db-stat">
+                <span className="db-icon">💾</span>
+                <span className="db-label">Events:</span>
+                <span className="db-value">{databaseStats.eventCount}</span>
+              </div>
+              <div className="db-stat">
+                <span className="db-icon">🔄</span>
+                <span className="db-label">Sync:</span>
+                <span className="db-value">{databaseStats.syncPercentage}%</span>
+              </div>
             </div>
-            <div className="db-stat">
-              <span className="db-icon">🔄</span>
-              <span className="db-label">Sync:</span>
-              <span className="db-value">{databaseStats.syncPercentage}%</span>
-            </div>
+            {onToggleOnline && (
+              <div className="online-toggle">
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={isOnline}
+                    onChange={(e) => onToggleOnline(deviceId, e.target.checked)}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+                <span className="toggle-label">{isOnline ? 'Online' : 'Offline'}</span>
+              </div>
+            )}
           </div>
         )}
       </div>

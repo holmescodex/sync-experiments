@@ -14,6 +14,8 @@
 
 import type { DeviceDB } from '../storage/device-db'
 import type { SimulationEngine } from '../simulation/engine'
+import { FileChunkHandler, type FileMessageAttachment } from '../files/FileChunkHandler'
+import type { NetworkSimulator } from '../network/simulator'
 
 export interface ChatMessage {
   id: string
@@ -21,13 +23,14 @@ export interface ChatMessage {
   author: string
   timestamp: number
   isOwn: boolean
-  attachments?: any[]
+  attachments?: FileMessageAttachment[]
 }
 
 export interface ChatAPIConfig {
   deviceId: string
   database: DeviceDB
   engine: SimulationEngine
+  networkSimulator: NetworkSimulator
 }
 
 export type MessageCallback = (messages: ChatMessage[]) => void
@@ -37,6 +40,7 @@ export class ChatAPI {
   private deviceId: string
   private database: DeviceDB
   private engine: SimulationEngine
+  private fileChunkHandler: FileChunkHandler
   private messageCallbacks: Set<MessageCallback> = new Set()
   private newMessageCallbacks: Set<NewMessageCallback> = new Set()
   private lastEventCount = 0
@@ -46,6 +50,13 @@ export class ChatAPI {
     this.deviceId = config.deviceId
     this.database = config.database
     this.engine = config.engine
+    
+    // Initialize file chunk handler
+    this.fileChunkHandler = new FileChunkHandler(
+      config.deviceId,
+      config.database,
+      config.networkSimulator
+    )
     
     // Start polling for database changes
     this.startPolling()
@@ -87,9 +98,16 @@ export class ChatAPI {
   /**
    * Send a message through the simulation engine
    */
-  async sendMessage(content: string, attachments?: any[]): Promise<void> {
+  async sendMessage(content: string, attachments?: FileMessageAttachment[]): Promise<void> {
     // The engine will handle storing in the database and network transmission
-    await this.engine.createMessageEvent(this.deviceId, content)
+    await this.engine.createMessageEvent(this.deviceId, content, undefined, attachments)
+  }
+  
+  /**
+   * Upload a file and get attachment metadata
+   */
+  async uploadFile(fileData: Uint8Array, mimeType: string, fileName?: string): Promise<FileMessageAttachment> {
+    return await this.fileChunkHandler.uploadFile(fileData, mimeType, fileName)
   }
   
   /**
@@ -150,8 +168,24 @@ export class ChatAPI {
                   attachments: payload.attachments
                 }
                 
+                // Handle file attachments if present
+                if (payload.attachments && payload.attachments.length > 0) {
+                  for (const attachment of payload.attachments) {
+                    await this.fileChunkHandler.handleFileAttachment(attachment)
+                  }
+                }
+                
                 // Notify new message callbacks
                 this.newMessageCallbacks.forEach(cb => cb(message))
+              } else if (payload.type === 'file_chunk') {
+                // Handle file chunk events
+                const chunkData = Buffer.from(payload.chunkData, 'base64')
+                await this.fileChunkHandler.handleChunkEvent({
+                  type: 'file_chunk',
+                  prfTag: payload.prfTag,
+                  encryptedData: new Uint8Array(chunkData),
+                  timestamp: payload.timestamp
+                })
               }
             } catch (error) {
               console.warn(`Failed to process new event:`, error)
@@ -195,9 +229,12 @@ export function createChatAPI(
     return null
   }
   
+  const networkSimulator = engine.getNetworkSimulator()
+  
   return new ChatAPI({
     deviceId,
     database,
-    engine
+    engine,
+    networkSimulator
   })
 }

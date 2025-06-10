@@ -33,6 +33,15 @@ export class SyncManager {
     // Initialize with the specified strategy
     this.switchStrategy(initialStrategy)
   }
+
+  /**
+   * Set callback to check if device is online
+   */
+  setOnlineStatusCallback(callback: () => boolean): void {
+    if (this.currentStrategy && 'setOnlineStatusCallback' in this.currentStrategy) {
+      (this.currentStrategy as any).setOnlineStatusCallback(callback)
+    }
+  }
   
   /**
    * Switch to a different sync strategy

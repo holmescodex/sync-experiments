@@ -162,7 +162,7 @@ export function EventLogWithControls({
 
       <div className="timeline-display">
         <div className="timeline-header">
-          <span className="current-time-badge">
+          <span className="current-time-badge" data-testid="current-time">
             Current: {formatTime(currentTime)}
           </span>
         </div>

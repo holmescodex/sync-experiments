@@ -7,6 +7,7 @@ export interface NetworkEvent {
   payload: any
   status: 'sent' | 'delivered' | 'dropped'
   latency?: number
+  verified?: boolean // True if cryptographically verified
 }
 
 export interface NetworkConfig {
@@ -87,7 +88,19 @@ export class NetworkSimulator {
     this.networkEvents.push(networkEvent)
     this.notifyEventCallbacks(networkEvent)
 
-    // Check if packet should be dropped
+    // Check if source device is offline - if so, drop the event immediately
+    const sourceDeviceState = this.devices.get(sourceDevice)
+    if (!sourceDeviceState || !sourceDeviceState.isOnline) {
+      const droppedEvent: NetworkEvent = {
+        ...networkEvent,
+        status: 'dropped'
+      }
+      this.networkEvents.push(droppedEvent)
+      this.notifyEventCallbacks(droppedEvent)
+      return droppedEvent
+    }
+
+    // Check if packet should be dropped due to packet loss
     if (Math.random() < this.config.packetLossRate) {
       const droppedEvent: NetworkEvent = {
         ...networkEvent,

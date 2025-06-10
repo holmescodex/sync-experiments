@@ -10,5 +10,13 @@ module.exports = defineConfig({
     video: false, // Disable video recording for faster execution
     viewportWidth: 1400,
     viewportHeight: 900,
+    setupNodeEvents(on, config) {
+      on('task', {
+        log(message) {
+          console.log(message)
+          return null
+        }
+      })
+    }
   },
 })

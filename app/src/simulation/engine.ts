@@ -1,6 +1,6 @@
 export interface SimulationEvent {
   simTime: number
-  type: 'message' | 'file' | 'device_join' | 'device_leave'
+  type: 'message' | 'file' | 'device_join' | 'device_leave' | 'file_chunk'
   deviceId: string
   data: any
   executed?: boolean
@@ -16,11 +16,17 @@ export interface DeviceFrequency {
   deviceId: string
   messagesPerHour: number
   enabled: boolean
+  isOnline?: boolean
 }
 
 import { NetworkSimulator, type NetworkEvent, type NetworkConfig } from '../network/simulator'
 import { SyncManager } from '../sync/SyncManager'
 import { DeviceDB } from '../storage/device-db'
+// Crypto imports commented out for now
+// import { KeyManager } from '../crypto/KeyManager'
+// import { PacketSigner } from '../crypto/PacketSigner'
+// import { SecureMessageLayer } from '../crypto/SecureMessageLayer'
+// import { SecureNetworkAdapter } from '../network/SecureNetworkAdapter'
 
 export interface NetworkMessageCallback {
   (deviceId: string, content: string, fromDevice: string): void
@@ -36,11 +42,18 @@ export class SimulationEngine {
   private networkMessageCallback?: NetworkMessageCallback
   private deviceFrequencies: DeviceFrequency[] = []
   private nextEventId = 1
+  private deviceOfflineStatus: Map<string, boolean> = new Map()
   private networkSimulator: NetworkSimulator
   private totalGeneratedEvents = 0
   private syncManagers: Map<string, SyncManager> = new Map()
   private deviceDatabases: Map<string, DeviceDB> = new Map()
+  // Crypto infrastructure commented out for now
+  // private keyManagers: Map<string, KeyManager> = new Map()
+  // private packetSigners: Map<string, PacketSigner> = new Map()
+  // private secureMessageLayers: Map<string, SecureMessageLayer> = new Map()
+  // private secureNetworkAdapters: Map<string, SecureNetworkAdapter> = new Map()
   private lastSyncTime = 0 // Track when we last ran sync
+  // private communityPSK = 'test-community-psk' // Shared key for the community
 
   constructor() {
     this.networkSimulator = new NetworkSimulator()
@@ -48,6 +61,11 @@ export class SimulationEngine {
     // Set up network message delivery
     this.networkSimulator.onNetworkEvent((networkEvent: NetworkEvent) => {
       if (networkEvent.status === 'delivered' && networkEvent.type === 'message') {
+        // Skip if target device is offline
+        if (this.deviceOfflineStatus.get(networkEvent.targetDevice)) {
+          return
+        }
+        
         // Skip bloom sync encrypted events - they'll be handled by the sync manager
         if (networkEvent.payload.encrypted) {
           return
@@ -97,6 +115,11 @@ export class SimulationEngine {
     const syncInterval = 1000 // 1 second in simulation time
     if (this.currentTime - this.lastSyncTime >= syncInterval) {
       for (const [deviceId, syncManager] of this.syncManagers) {
+        // Skip sync if device is offline
+        if (this.deviceOfflineStatus.get(deviceId)) {
+          continue
+        }
+        
         try {
           await syncManager.updateLocalState()
         } catch (error) {
@@ -107,14 +130,14 @@ export class SimulationEngine {
     }
   }
 
-  async createMessageEvent(deviceId: string, content: string, simTime?: number) {
+  async createMessageEvent(deviceId: string, content: string, simTime?: number, attachments?: any[]) {
     const eventId = `msg-${deviceId}-${this.nextEventId++}`
     const event: SimulationEvent = {
       simTime: simTime ?? this.currentTime,
       type: 'message',
       deviceId,
       eventId,
-      data: { content, eventId }
+      data: { content, eventId, attachments }
     }
     this.eventTimeline.push(event)
 
@@ -277,25 +300,29 @@ export class SimulationEngine {
     
     // Store event in the device's local database
     if (event.type === 'message' && event.eventId) {
+      let encrypted: Uint8Array | null = null
+      
+      // Pass plaintext event to device - let the device handle encryption
       const db = this.deviceDatabases.get(event.deviceId)
       console.log(`[DEBUG] Looking for database for device ${event.deviceId}, found: ${db ? 'yes' : 'no'}`)
       console.log(`[DEBUG] Available databases: ${Array.from(this.deviceDatabases.keys()).join(', ')}`)
       if (db) {
         try {
-          // Create encrypted payload (simplified for simulation)
+          // For now, do simple encoding until we implement proper crypto in DeviceDB
           const payload = JSON.stringify({
             type: 'message',
             content: event.data.content,
             timestamp: event.simTime,
-            author: event.deviceId
+            author: event.deviceId,
+            attachments: event.data.attachments
           })
-          const encrypted = new TextEncoder().encode(payload)
+          encrypted = new TextEncoder().encode(payload)
           
           const insertedEventId = await db.insertEvent({
             device_id: event.deviceId,
             created_at: event.simTime,
             received_at: event.simTime,
-            simulation_event_id: event.data.simulation_event_id,
+            simulation_event_id: event.data.simulation_event_id || 0,
             encrypted
           })
           console.log(`[DEBUG] Stored event ${insertedEventId} in ${event.deviceId}'s database`)
@@ -311,15 +338,19 @@ export class SimulationEngine {
         }
       }
       
-      // Broadcast the message directly to all peers for immediate delivery
-      // This works alongside Bloom filter sync for better real-time performance
-      this.networkSimulator.broadcastEvent(event.deviceId, 'message', {
-        content: event.data.content,
-        eventId: event.eventId,
-        timestamp: event.simTime,
-        author: event.deviceId,
-        encrypted
-      })
+      // Only broadcast if device is online and we have encrypted data
+      if (!this.deviceOfflineStatus.get(event.deviceId) && encrypted) {
+        // Broadcast the message directly to all peers for immediate delivery
+        // This works alongside Bloom filter sync for better real-time performance
+        this.networkSimulator.broadcastEvent(event.deviceId, 'message', {
+          content: event.data.content,
+          eventId: event.eventId,
+          timestamp: event.simTime,
+          author: event.deviceId,
+          attachments: event.data.attachments,
+          encrypted: Array.from(encrypted)
+        })
+      }
     }
   }
 
@@ -374,7 +405,13 @@ export class SimulationEngine {
       this.deviceDatabases.set(deviceId, db)
       
       // Initialize sync manager
-      const syncManager = new SyncManager(deviceId, this.networkSimulator, db)
+      const syncManager = new SyncManager(deviceId, this.networkSimulator, db, 'bloom-filter')
+      
+      // Set up online status callback
+      syncManager.setOnlineStatusCallback(() => {
+        return this.getDeviceOnlineStatus(deviceId)
+      })
+      
       this.syncManagers.set(deviceId, syncManager)
     }
   }
@@ -391,5 +428,94 @@ export class SimulationEngine {
    */
   getDeviceDatabase(deviceId: string): DeviceDB | undefined {
     return this.deviceDatabases.get(deviceId)
+  }
+
+  /**
+   * Set a device's online/offline status
+   */
+  setDeviceOnlineStatus(deviceId: string, isOnline: boolean): void {
+    this.deviceOfflineStatus.set(deviceId, !isOnline)
+    
+    // Update device frequency to reflect status
+    const deviceFreq = this.deviceFrequencies.find(d => d.deviceId === deviceId)
+    if (deviceFreq) {
+      deviceFreq.isOnline = isOnline
+    }
+    
+    // Synchronize with network simulator
+    this.networkSimulator.setDeviceOnline(deviceId, isOnline)
+  }
+
+  /**
+   * Get a device's online status
+   */
+  getDeviceOnlineStatus(deviceId: string): boolean {
+    return !this.deviceOfflineStatus.get(deviceId)
+  }
+
+  /**
+   * Get all device online statuses
+   */
+  getAllDeviceOnlineStatus(): Map<string, boolean> {
+    const statuses = new Map<string, boolean>()
+    for (const freq of this.deviceFrequencies) {
+      statuses.set(freq.deviceId, !this.deviceOfflineStatus.get(freq.deviceId))
+    }
+    return statuses
+  }
+
+  /**
+   * Reset the simulation engine to initial state
+   */
+  reset(): void {
+    console.log('[SimulationEngine] Resetting simulation...')
+    
+    // Reset time and state
+    this.currentTime = 0
+    this.isRunning = true
+    this.speedMultiplier = 1
+    this.totalGeneratedEvents = 0
+    this.lastSyncTime = 0
+    this.nextEventId = 1
+    
+    // Clear timelines and events
+    this.eventTimeline = []
+    
+    // Clear device state
+    this.deviceFrequencies = []
+    this.deviceOfflineStatus.clear()
+    
+    // Clear sync managers and databases
+    this.syncManagers.clear()
+    this.deviceDatabases.clear()
+    
+    // Reset network simulator
+    this.networkSimulator = new NetworkSimulator()
+    
+    // Re-setup network event handling
+    this.networkSimulator.onNetworkEvent((networkEvent: NetworkEvent) => {
+      if (networkEvent.status === 'delivered' && networkEvent.type === 'message') {
+        // Skip if target device is offline
+        if (this.deviceOfflineStatus.get(networkEvent.targetDevice)) {
+          return
+        }
+        
+        // Skip bloom sync encrypted events - they'll be handled by the sync manager
+        if (networkEvent.payload.encrypted) {
+          return
+        }
+        
+        // Only process regular message events with content
+        if (this.networkMessageCallback && networkEvent.payload.content) {
+          this.networkMessageCallback(
+            networkEvent.targetDevice, 
+            networkEvent.payload.content,
+            networkEvent.sourceDevice
+          )
+        }
+      }
+    })
+    
+    console.log('[SimulationEngine] Reset complete')
   }
 }

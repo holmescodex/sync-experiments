@@ -3,8 +3,11 @@ import { SimulationEngine, type DeviceFrequency, type SimulationEvent } from './
 import { ChatInterface, type ChatInterfaceRef } from './components/ChatInterface'
 import { EventLogWithControls } from './components/EventLogWithControls'
 import { NetworkEventLog } from './components/NetworkEventLog'
+import { HowItWorksArticle } from './components/HowItWorksArticle'
+import { DevConsoleMonitor } from './components/DevConsoleMonitor'
 import type { NetworkEvent } from './network/simulator'
 import { createChatAPI, type ChatAPI } from './api/ChatAPI'
+import { BackendAdapter } from './api/BackendAdapter'
 import './App.css'
 
 function App() {
@@ -15,8 +18,8 @@ function App() {
   const [globalMessagesPerHour, setGlobalMessagesPerHour] = useState(50)
   const [imageAttachmentPercentage, setImageAttachmentPercentage] = useState(30)
   const [frequencies, setFrequencies] = useState<DeviceFrequency[]>([
-    { deviceId: 'alice', messagesPerHour: 30, enabled: true },
-    { deviceId: 'bob', messagesPerHour: 20, enabled: true }
+    { deviceId: 'alice', messagesPerHour: 30, enabled: true, isOnline: true },
+    { deviceId: 'bob', messagesPerHour: 20, enabled: true, isOnline: true }
   ])
   const [upcomingEvents, setUpcomingEvents] = useState<SimulationEvent[]>([])
   const [executedEvents, setExecutedEvents] = useState<SimulationEvent[]>([])
@@ -24,10 +27,61 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<Map<string, { isSynced: boolean, syncPercentage: number }>>(new Map())
   const [databasesInitialized, setDatabasesInitialized] = useState(false)
   const [chatAPIs, setChatAPIs] = useState<Map<string, ChatAPI>>(new Map())
+  const [backendAdapters, setBackendAdapters] = useState<Map<string, BackendAdapter>>(new Map())
   const [databaseStats, setDatabaseStats] = useState<Map<string, { eventCount: number, syncPercentage: number }>>(new Map())
+  const [showIndicator, setShowIndicator] = useState(true)
   
   const aliceRef = useRef<ChatInterfaceRef>(null)
   const bobRef = useRef<ChatInterfaceRef>(null)
+
+  useEffect(() => {
+    // Initialize backend adapters
+    const initBackendAdapters = async () => {
+      const adapters = new Map<string, BackendAdapter>()
+      
+      // Wait for chatAPIs to be initialized
+      if (chatAPIs.size === 0) return
+      
+      // Try to connect to backend servers
+      try {
+        // Check if alice backend is available
+        const aliceBackendUrl = 'http://localhost:3001'
+        const aliceResponse = await fetch(`${aliceBackendUrl}/api/health`).catch(() => null)
+        if (aliceResponse?.ok) {
+          console.log('[App] Alice backend detected at', aliceBackendUrl)
+          adapters.set('alice', new BackendAdapter('alice', aliceBackendUrl))
+        } else {
+          // Fallback to local ChatAPI
+          const aliceAPI = chatAPIs.get('alice')
+          if (aliceAPI) {
+            console.log('[App] Using local ChatAPI for alice')
+            adapters.set('alice', new BackendAdapter('alice', undefined, aliceAPI))
+          }
+        }
+        
+        // Check if bob backend is available
+        const bobBackendUrl = 'http://localhost:3002'
+        const bobResponse = await fetch(`${bobBackendUrl}/api/health`).catch(() => null)
+        if (bobResponse?.ok) {
+          console.log('[App] Bob backend detected at', bobBackendUrl)
+          adapters.set('bob', new BackendAdapter('bob', bobBackendUrl))
+        } else {
+          // Fallback to local ChatAPI
+          const bobAPI = chatAPIs.get('bob')
+          if (bobAPI) {
+            console.log('[App] Using local ChatAPI for bob')
+            adapters.set('bob', new BackendAdapter('bob', undefined, bobAPI))
+          }
+        }
+      } catch (error) {
+        console.warn('[App] Error initializing backend adapters:', error)
+      }
+      
+      setBackendAdapters(adapters)
+    }
+    
+    initBackendAdapters()
+  }, [chatAPIs])
 
   useEffect(() => {
     // Initialize engine with global rate distributed across enabled devices
@@ -84,7 +138,7 @@ function App() {
       await engine.tick()
       setCurrentTime(engine.currentSimTime())
       setUpcomingEvents(engine.getUpcomingEvents(10))
-      setNetworkEvents(engine.getNetworkEvents(50))
+      setNetworkEvents(engine.getNetworkEvents(1000))
       const deviceSyncStatus = engine.getDeviceSyncStatus()
       setSyncStatus(deviceSyncStatus)
       
@@ -122,6 +176,17 @@ function App() {
     }
   }, [engine, frequencies, globalMessagesPerHour])
 
+  // Handle scroll to hide/show indicator
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollPosition = window.scrollY
+      setShowIndicator(scrollPosition < 100)
+    }
+
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
   const handlePause = () => {
     engine.pause()
     setIsRunning(false)
@@ -137,9 +202,33 @@ function App() {
     setSpeedMultiplier(speed)
   }
 
-  const handleReset = () => {
-    // For Phase 1, we'll just reload the page
-    // In Phase 2+, we'll properly reset the simulation state
+  const handleReset = async () => {
+    // Clear backend databases if connected
+    for (const [deviceId, adapter] of backendAdapters) {
+      if (adapter.getBackendType() === 'api') {
+        try {
+          // Clear backend database
+          const backendUrl = deviceId === 'alice' ? 'http://localhost:3001' : 'http://localhost:3002'
+          await fetch(`${backendUrl}/api/messages/clear`, { method: 'DELETE' })
+          console.log(`[App] Cleared backend database for ${deviceId}`)
+        } catch (error) {
+          console.warn(`[App] Failed to clear backend for ${deviceId}:`, error)
+        }
+      }
+    }
+    
+    // Reset the simulation engine
+    engine.reset()
+    
+    // Clear local state
+    setCurrentTime(0)
+    setUpcomingEvents([])
+    setExecutedEvents([])
+    setNetworkEvents([])
+    setSyncStatus(new Map())
+    setDatabaseStats(new Map())
+    
+    // Reload to reinitialize everything cleanly
     window.location.reload()
   }
 
@@ -181,75 +270,121 @@ function App() {
     engine.updateNetworkConfig(config)
   }
 
+  const handleScrollToArticle = () => {
+    const articleElement = document.getElementById('how-it-works')
+    if (articleElement) {
+      articleElement.scrollIntoView({ behavior: 'smooth' })
+    }
+  }
+
+  const handleToggleOnline = (deviceId: string, isOnline: boolean) => {
+    console.log(`[App] Setting ${deviceId} to ${isOnline ? 'online' : 'offline'}`)
+    
+    // Update engine state
+    engine.setDeviceOnlineStatus(deviceId, isOnline)
+    
+    // Update frequencies state
+    setFrequencies(prev => prev.map(freq => 
+      freq.deviceId === deviceId 
+        ? { ...freq, isOnline }
+        : freq
+    ))
+  }
+
   return (
-    <div className="app" data-testid="simulation-app">
-      <main className="app-layout-networked">
-        {/* Left Column 1: Event Timeline & Controls */}
-        <section className="timeline-section">
-          <EventLogWithControls
-            currentTime={currentTime}
-            upcomingEvents={upcomingEvents}
-            executedEvents={executedEvents}
-            frequencies={frequencies}
-            onUpdateFrequencies={handleFrequencyUpdate}
-            isRunning={isRunning}
-            speedMultiplier={speedMultiplier}
-            globalMessagesPerHour={globalMessagesPerHour}
-            onUpdateGlobalMessagesPerHour={handleGlobalMessagesPerHourUpdate}
-            imageAttachmentPercentage={imageAttachmentPercentage}
-            onUpdateImagePercentage={handleImagePercentageUpdate}
-            onPause={handlePause}
-            onResume={handleResume}
-            onSetSpeed={handleSetSpeed}
-            onReset={handleReset}
-          />
-        </section>
-        
-        {/* Left Column 2: Network Activity */}
-        <section className="network-section">
-          <NetworkEventLog
-            networkEvents={networkEvents}
-            networkConfig={engine.getNetworkConfig()}
-            networkStats={engine.getNetworkStats()}
-            onConfigUpdate={handleNetworkConfigUpdate}
-          />
-        </section>
-        
-        {/* Right: Chat */}
-        <section className="simulation-section">
-          <div className="chat-apps">
-            <div className="section-header">
-              <h3>Device Chat Interfaces</h3>
-              <p className="section-description">
-                P2P messaging simulation. Messages from other devices appear via network delivery.
-              </p>
+    <>
+      <div className="app" data-testid="simulation-app">
+        <main className="app-layout-networked">
+          {/* Left Column 1: Event Timeline & Controls */}
+          <section className="timeline-section">
+            <EventLogWithControls
+              currentTime={currentTime}
+              upcomingEvents={upcomingEvents}
+              executedEvents={executedEvents}
+              frequencies={frequencies}
+              onUpdateFrequencies={handleFrequencyUpdate}
+              isRunning={isRunning}
+              speedMultiplier={speedMultiplier}
+              globalMessagesPerHour={globalMessagesPerHour}
+              onUpdateGlobalMessagesPerHour={handleGlobalMessagesPerHourUpdate}
+              imageAttachmentPercentage={imageAttachmentPercentage}
+              onUpdateImagePercentage={handleImagePercentageUpdate}
+              onPause={handlePause}
+              onResume={handleResume}
+              onSetSpeed={handleSetSpeed}
+              onReset={handleReset}
+            />
+          </section>
+          
+          {/* Left Column 2: Network Activity */}
+          <section className="network-section">
+            <NetworkEventLog
+              networkEvents={networkEvents}
+              networkConfig={engine.getNetworkConfig()}
+              networkStats={engine.getNetworkStats()}
+              onConfigUpdate={handleNetworkConfigUpdate}
+            />
+          </section>
+          
+          {/* Right: Chat */}
+          <section className="simulation-section">
+            <div className="chat-apps">
+              <div className="section-header">
+                <h3>Device Chat Interfaces</h3>
+                <p className="section-description">
+                  P2P messaging simulation. Messages from other devices appear via network delivery.
+                </p>
+              </div>
+              <div className="chat-grid">
+                <ChatInterface 
+                  ref={aliceRef}
+                  deviceId="alice" 
+                  currentSimTime={currentTime}
+                  syncStatus={syncStatus.get('alice')}
+                  imageAttachmentPercentage={imageAttachmentPercentage}
+                  onManualMessage={handleManualMessage}
+                  chatAPI={chatAPIs.get('alice')}
+                  backendAdapter={backendAdapters.get('alice')}
+                  databaseStats={databaseStats.get('alice')}
+                  isOnline={frequencies.find(f => f.deviceId === 'alice')?.isOnline ?? true}
+                  onToggleOnline={handleToggleOnline}
+                />
+                <ChatInterface 
+                  ref={bobRef}
+                  deviceId="bob" 
+                  currentSimTime={currentTime}
+                  syncStatus={syncStatus.get('bob')}
+                  imageAttachmentPercentage={imageAttachmentPercentage}
+                  onManualMessage={handleManualMessage}
+                  chatAPI={chatAPIs.get('bob')}
+                  backendAdapter={backendAdapters.get('bob')}
+                  databaseStats={databaseStats.get('bob')}
+                  isOnline={frequencies.find(f => f.deviceId === 'bob')?.isOnline ?? true}
+                  onToggleOnline={handleToggleOnline}
+                />
+              </div>
             </div>
-            <div className="chat-grid">
-              <ChatInterface 
-                ref={aliceRef}
-                deviceId="alice" 
-                currentSimTime={currentTime}
-                syncStatus={syncStatus.get('alice')}
-                imageAttachmentPercentage={imageAttachmentPercentage}
-                onManualMessage={handleManualMessage}
-                chatAPI={chatAPIs.get('alice')}
-                databaseStats={databaseStats.get('alice')}
-              />
-              <ChatInterface 
-                ref={bobRef}
-                deviceId="bob" 
-                currentSimTime={currentTime}
-                syncStatus={syncStatus.get('bob')}
-                imageAttachmentPercentage={imageAttachmentPercentage}
-                onManualMessage={handleManualMessage}
-                chatAPI={chatAPIs.get('bob')}
-                databaseStats={databaseStats.get('bob')}
-              />
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
+          </section>
+        </main>
+        
+        {/* Floating "How does this work?" indicator */}
+        <button 
+          className={`how-it-works-indicator ${!showIndicator ? 'hide' : ''}`}
+          onClick={handleScrollToArticle}
+        >
+          <span>How does this work?</span>
+          <span className="arrow-down">↓</span>
+        </button>
+      </div>
+      
+      {/* How It Works Article */}
+      <div id="how-it-works">
+        <HowItWorksArticle />
+      </div>
+      
+      {/* Development Console Monitor */}
+      <DevConsoleMonitor />
+    </>
   )
 }
 

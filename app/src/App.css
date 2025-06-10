@@ -1092,6 +1092,15 @@
   font-weight: 500;
 }
 
+.status-indicator.offline {
+  color: #dc3545;
+}
+
+.status-indicator.sync.disabled {
+  color: #9ca3af;
+  opacity: 0.6;
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -1540,6 +1549,29 @@
   font-size: 0.9rem;
   font-weight: 500;
   color: #495057;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.display-limit-select {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  background: white;
+  font-size: 0.85rem;
+  color: #495057;
+  cursor: pointer;
+}
+
+.display-limit-select:hover {
+  border-color: #80bdff;
+}
+
+.display-limit-select:focus {
+  outline: none;
+  border-color: #80bdff;
+  box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
 }
 
 .events-list {
@@ -1674,6 +1706,23 @@
 .file-preview-size {
   font-size: 0.8rem;
   color: #6c757d;
+}
+
+.file-preview-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.compression-info {
+  color: #888;
+  font-style: italic;
+}
+
+.compression-status {
+  color: #007bff;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .file-remove-btn {
@@ -1812,7 +1861,7 @@
   color: #e2e8f0;
   padding: 6px 12px;
   display: flex;
-  gap: 1rem;
+  justify-content: space-between;
   align-items: center;
   font-size: 0.75rem;
   border-bottom-left-radius: 12px;
@@ -1820,6 +1869,12 @@
   margin-top: -1px;
   border: 1px solid #1a202c;
   border-top: none;
+}
+
+.db-stats {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
 }
 
 .db-stat {
@@ -1843,6 +1898,66 @@
   color: #f7fafc;
   font-size: 0.75rem;
 }
+
+/* Online Toggle Switch */
+.online-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #4a5568;
+  transition: 0.3s;
+  border-radius: 18px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #a0aec0;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+  background-color: #718096;
+}
+
+input:checked + .toggle-slider:before {
+  background-color: #f7fafc;
+  transform: translateX(14px);
+}
+
+.toggle-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #a0aec0;
+}
+
 /* Device Activity Panels */
 .device-activity-section {
   margin-top: 2rem;
@@ -1983,4 +2098,220 @@
 
 .device-panel .export-btn:hover {
   background: #1565c0;
+}
+
+/* How It Works Article Styles */
+.how-it-works-indicator {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #007bff;
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 24px;
+  box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.3s ease;
+  z-index: 100;
+}
+
+.how-it-works-indicator:hover {
+  background: #0056b3;
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 123, 255, 0.4);
+}
+
+.how-it-works-indicator.hide {
+  opacity: 0;
+  transform: translateX(-50%) translateY(100px);
+  pointer-events: none;
+}
+
+.arrow-down {
+  font-size: 1rem;
+  animation: bounce 2s infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+
+.how-it-works {
+  padding: 4rem 2rem;
+  max-width: 900px;
+  margin: 0 auto;
+  background: #fff;
+  min-height: 100vh;
+}
+
+.article-content h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #1a202c;
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.article-content .intro {
+  font-size: 1.25rem;
+  line-height: 1.8;
+  color: #4a5568;
+  text-align: center;
+  margin-bottom: 4rem;
+  font-weight: 400;
+}
+
+.article-content section {
+  margin-bottom: 4rem;
+}
+
+.article-content h2 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: #2d3748;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.article-content h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #2d3748;
+  margin-bottom: 0.75rem;
+}
+
+.article-content p {
+  font-size: 1.1rem;
+  line-height: 1.8;
+  color: #4a5568;
+  margin-bottom: 1.5rem;
+}
+
+.article-content ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 2rem 0;
+}
+
+.article-content ul li {
+  font-size: 1.1rem;
+  line-height: 1.8;
+  color: #4a5568;
+  padding-left: 1.5rem;
+  position: relative;
+  margin-bottom: 0.75rem;
+}
+
+.article-content ul li:before {
+  content: "•";
+  color: #007bff;
+  font-weight: bold;
+  position: absolute;
+  left: 0;
+}
+
+.diagram {
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 2rem 0;
+  overflow-x: auto;
+}
+
+.diagram pre {
+  margin: 0;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: #2d3748;
+  white-space: pre;
+}
+
+.code-example {
+  background: #1a202c;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 2rem 0;
+  overflow-x: auto;
+}
+
+.code-example pre {
+  margin: 0;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+  white-space: pre;
+}
+
+.key-benefits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 2rem;
+  margin: 3rem 0;
+}
+
+.benefit {
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.benefit:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+}
+
+.benefit h3 {
+  font-size: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.benefit p {
+  font-size: 1rem;
+  margin: 0;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .how-it-works {
+    padding: 2rem 1rem;
+  }
+  
+  .article-content h1 {
+    font-size: 2rem;
+  }
+  
+  .article-content .intro {
+    font-size: 1.1rem;
+  }
+  
+  .article-content h2 {
+    font-size: 1.5rem;
+  }
+  
+  .diagram {
+    padding: 1rem;
+  }
+  
+  .diagram pre {
+    font-size: 0.75rem;
+  }
+  
+  .key-benefits {
+    grid-template-columns: 1fr;
+  }
 }

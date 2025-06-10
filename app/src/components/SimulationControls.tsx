@@ -74,6 +74,7 @@ export function SimulationControls({
           <button 
             onClick={onReset} 
             className="control-btn reset-btn"
+            data-testid="reset-button"
             title="Reset simulation to beginning"
           >
             ↻

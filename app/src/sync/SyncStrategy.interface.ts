@@ -17,7 +17,7 @@ export interface SyncStrategy {
   /**
    * Initialize the sync strategy for a specific device
    */
-  initialize(deviceId: string, network: NetworkSimulator, database: DeviceDB): Promise<void>
+  initialize(deviceId: string, network: NetworkSimulator, database: DeviceDB, ...args: any[]): Promise<void>
   
   /**
    * Handle incoming network events (bloom filters, messages, etc.)

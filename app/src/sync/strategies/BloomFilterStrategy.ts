@@ -17,6 +17,7 @@ export class BloomFilterStrategy implements SyncStrategy {
   private deviceId = ''
   private network: NetworkSimulator | null = null
   private database: DeviceDB | null = null
+  private isDeviceOnlineCallback: (() => boolean) | null = null
   
   private myBloom: CumulativeBloomFilter
   private peerKnowledge: PeerKnowledge
@@ -47,6 +48,11 @@ export class BloomFilterStrategy implements SyncStrategy {
   }
   
   async handleNetworkEvent(event: NetworkEvent): Promise<void> {
+    // Skip processing if device is offline
+    if (this.isDeviceOnlineCallback && !this.isDeviceOnlineCallback()) {
+      return
+    }
+    
     switch (event.type) {
       case 'bloom_filter':
         await this.handleBloomFilter(event)
@@ -60,8 +66,17 @@ export class BloomFilterStrategy implements SyncStrategy {
     }
   }
   
+  setOnlineStatusCallback(callback: () => boolean): void {
+    this.isDeviceOnlineCallback = callback
+  }
+
   async onSyncTick(): Promise<void> {
     if (!this.network) return
+    
+    // Skip sync if device is offline
+    if (this.isDeviceOnlineCallback && !this.isDeviceOnlineCallback()) {
+      return
+    }
     
     // Update our Bloom filter with any new events
     await this.updateLocalBloom()
@@ -189,6 +204,7 @@ export class BloomFilterStrategy implements SyncStrategy {
       for (let i = 0; i < eventsToSend.length; i++) {
         const eventToSend = eventsToSend[i]
         console.log(`[BLOOM] ${this.deviceId} sending event ${i+1}/${eventsToSend.length}: ${eventToSend.event_id}`)
+        
         this.network.sendEvent(this.deviceId, peerId, 'message', {
           eventId: eventToSend.event_id,
           encrypted: Array.from(eventToSend.encrypted),
@@ -219,9 +235,10 @@ export class BloomFilterStrategy implements SyncStrategy {
         // Store new event
         const encryptedBytes = new Uint8Array(eventData.encrypted)
         await this.database.insertEvent({
-          device_id: eventData.deviceId,
-          created_at: eventData.createdAt,
+          device_id: eventData.author || networkEvent.sourceDevice,
+          created_at: eventData.timestamp || this.network.getCurrentTime(),
           received_at: this.network.getCurrentTime(),
+          simulation_event_id: 0,
           encrypted: encryptedBytes
         })
         
