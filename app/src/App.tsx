@@ -3,7 +3,6 @@ import { SimulationEngine, type DeviceFrequency, type SimulationEvent } from './
 import { ChatInterface, type ChatInterfaceRef } from './components/ChatInterface'
 import { EventLogWithControls } from './components/EventLogWithControls'
 import { NetworkEventLog } from './components/NetworkEventLog'
-import { DevicePanel } from './components/DevicePanel'
 import type { NetworkEvent } from './network/simulator'
 import { createChatAPI, type ChatAPI } from './api/ChatAPI'
 import './App.css'
@@ -25,6 +24,7 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<Map<string, { isSynced: boolean, syncPercentage: number }>>(new Map())
   const [databasesInitialized, setDatabasesInitialized] = useState(false)
   const [chatAPIs, setChatAPIs] = useState<Map<string, ChatAPI>>(new Map())
+  const [databaseStats, setDatabaseStats] = useState<Map<string, { eventCount: number, syncPercentage: number }>>(new Map())
   
   const aliceRef = useRef<ChatInterfaceRef>(null)
   const bobRef = useRef<ChatInterfaceRef>(null)
@@ -85,7 +85,23 @@ function App() {
       setCurrentTime(engine.currentSimTime())
       setUpcomingEvents(engine.getUpcomingEvents(10))
       setNetworkEvents(engine.getNetworkEvents(50))
-      setSyncStatus(engine.getDeviceSyncStatus())
+      const deviceSyncStatus = engine.getDeviceSyncStatus()
+      setSyncStatus(deviceSyncStatus)
+      
+      // Update database stats
+      const dbStats = new Map<string, { eventCount: number, syncPercentage: number }>()
+      for (const deviceId of ['alice', 'bob']) {
+        const db = engine.getDeviceDatabase(deviceId)
+        if (db) {
+          const events = await db.getAllEvents()
+          const syncData = deviceSyncStatus.get(deviceId)
+          dbStats.set(deviceId, {
+            eventCount: events.length,
+            syncPercentage: syncData?.syncPercentage || 0
+          })
+        }
+      }
+      setDatabaseStats(dbStats)
       
       // Debug logging every 5 seconds
       if (Math.floor(engine.currentSimTime() / 5000) > Math.floor((engine.currentSimTime() - 100) / 5000)) {
@@ -217,6 +233,7 @@ function App() {
                 imageAttachmentPercentage={imageAttachmentPercentage}
                 onManualMessage={handleManualMessage}
                 chatAPI={chatAPIs.get('alice')}
+                databaseStats={databaseStats.get('alice')}
               />
               <ChatInterface 
                 ref={bobRef}
@@ -226,35 +243,8 @@ function App() {
                 imageAttachmentPercentage={imageAttachmentPercentage}
                 onManualMessage={handleManualMessage}
                 chatAPI={chatAPIs.get('bob')}
+                databaseStats={databaseStats.get('bob')}
               />
-            </div>
-            
-            {/* Device Activity Panels */}
-            <div className="device-activity-section">
-              <div className="section-header">
-                <h3>Device Database Activity</h3>
-                <p className="section-description">
-                  Real-time view of events stored in each device's SQLite database
-                </p>
-              </div>
-              <div className="device-panels">
-                {databasesInitialized ? (
-                  <>
-                    <DevicePanel 
-                      deviceId="alice"
-                      database={engine.getDeviceDatabase('alice')}
-                      syncManager={engine.getSyncManager('alice')}
-                    />
-                    <DevicePanel 
-                      deviceId="bob"
-                      database={engine.getDeviceDatabase('bob')}
-                      syncManager={engine.getSyncManager('bob')}
-                    />
-                  </>
-                ) : (
-                  <p>Initializing databases...</p>
-                )}
-              </div>
             </div>
           </div>
         </section>

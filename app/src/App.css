@@ -1805,6 +1805,44 @@
   font-size: 0.8rem;
   color: #6c757d;
 }
+
+/* Database Activity Panel */
+.database-activity {
+  background: #2d3748;
+  color: #e2e8f0;
+  padding: 6px 12px;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  font-size: 0.75rem;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+  margin-top: -1px;
+  border: 1px solid #1a202c;
+  border-top: none;
+}
+
+.db-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.db-icon {
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+.db-label {
+  color: #a0aec0;
+  font-size: 0.7rem;
+}
+
+.db-value {
+  font-weight: 600;
+  color: #f7fafc;
+  font-size: 0.75rem;
+}
 /* Device Activity Panels */
 .device-activity-section {
   margin-top: 2rem;

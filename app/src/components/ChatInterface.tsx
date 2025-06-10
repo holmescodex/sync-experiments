@@ -30,6 +30,7 @@ interface ChatInterfaceProps {
   imageAttachmentPercentage: number
   onManualMessage: (deviceId: string, content: string, attachments?: FileAttachment[]) => void
   chatAPI?: ChatAPI | null
+  databaseStats?: { eventCount: number, syncPercentage: number }
 }
 
 export interface ChatInterfaceRef {
@@ -37,7 +38,7 @@ export interface ChatInterfaceRef {
 }
 
 export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
-  ({ deviceId, currentSimTime, syncStatus, imageAttachmentPercentage, onManualMessage, chatAPI }, ref) => {
+  ({ deviceId, currentSimTime, syncStatus, imageAttachmentPercentage, onManualMessage, chatAPI, databaseStats }, ref) => {
     const [messages, setMessages] = useState<Message[]>([])
     const [inputValue, setInputValue] = useState('')
     const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([])
@@ -330,6 +331,22 @@ export const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(
             Send
           </button>
         </div>
+        
+        {/* Database Activity Panel */}
+        {databaseStats && (
+          <div className="database-activity">
+            <div className="db-stat">
+              <span className="db-icon">💾</span>
+              <span className="db-label">Events:</span>
+              <span className="db-value">{databaseStats.eventCount}</span>
+            </div>
+            <div className="db-stat">
+              <span className="db-icon">🔄</span>
+              <span className="db-label">Sync:</span>
+              <span className="db-value">{databaseStats.syncPercentage}%</span>
+            </div>
+          </div>
+        )}
       </div>
     )
   }

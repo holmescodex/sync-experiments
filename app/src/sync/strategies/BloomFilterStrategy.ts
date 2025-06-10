@@ -52,7 +52,7 @@ export class BloomFilterStrategy implements SyncStrategy {
         await this.handleBloomFilter(event)
         break
       case 'message':
-        // Handle received events (messages sent due to Bloom sync)
+        // Handle both direct broadcast messages and bloom sync messages
         if (event.payload.encrypted) {
           await this.handleReceivedEvent(event)
         }

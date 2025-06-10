@@ -311,12 +311,15 @@ export class SimulationEngine {
         }
       }
       
-      // NOTE: Direct broadcast disabled - rely on Bloom filter sync only
-      // this.networkSimulator.broadcastEvent(event.deviceId, 'message', {
-      //   content: event.data.content,
-      //   eventId: event.eventId,
-      //   timestamp: event.simTime
-      // })
+      // Broadcast the message directly to all peers for immediate delivery
+      // This works alongside Bloom filter sync for better real-time performance
+      this.networkSimulator.broadcastEvent(event.deviceId, 'message', {
+        content: event.data.content,
+        eventId: event.eventId,
+        timestamp: event.simTime,
+        author: event.deviceId,
+        encrypted
+      })
     }
   }
 
