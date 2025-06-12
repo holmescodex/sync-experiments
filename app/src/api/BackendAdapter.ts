@@ -1,7 +1,7 @@
 import { MessageAPI } from './MessageAPI'
 import { ChatAPI } from './ChatAPI'
 import { simulationEngineAPI } from './SimulationEngineAPI'
-import type { Message } from '../types/message'
+import type { Message, FileAttachment } from '../types/message'
 
 /**
  * Adapter that can use either the backend API or the local ChatAPI
@@ -13,6 +13,20 @@ export class BackendAdapter {
   private deviceId: string
   private lastSyncTime: number = 0
   private pollingInterval: NodeJS.Timeout | null = null
+
+  private convertAttachmentForUI(raw: any): FileAttachment {
+    const mime = raw.mimeType || raw.mime_type || 'application/octet-stream'
+    const isImage = mime.startsWith('image/')
+    return {
+      id: raw.fileId || raw.id || `att-${Date.now()}`,
+      type: isImage ? 'image' : 'document',
+      name: raw.fileName || raw.name || 'file',
+      size: raw.size || (raw.chunkCount ? raw.chunkCount * 500 : 0),
+      url: raw.dataUrl || raw.url,
+      mimeType: mime,
+      loadingState: 'loaded'
+    }
+  }
 
   constructor(deviceId: string, backendUrl?: string, chatAPI?: ChatAPI) {
     this.deviceId = deviceId
@@ -88,12 +102,16 @@ export class BackendAdapter {
         console.log(`[BackendAdapter ${this.deviceId}] Updated lastSyncTime to ${this.lastSyncTime}`)
       }
       
-      // Mark messages as own/received
+      // Mark messages as own/received and normalize attachments
       return messages.map(msg => {
         const isOwn = msg.author === this.deviceId
         console.log(`[BackendAdapter] Message from ${msg.author}, deviceId=${this.deviceId}, isOwn=${isOwn}`)
+        const attachments = Array.isArray(msg.attachments)
+          ? msg.attachments.map(a => this.convertAttachmentForUI(a))
+          : undefined
         return {
           ...msg,
+          attachments,
           isOwn
         }
       })
@@ -105,7 +123,7 @@ export class BackendAdapter {
         author: msg.author,
         content: msg.content,
         timestamp: msg.timestamp,
-        attachments: msg.attachments,
+        attachments: msg.attachments?.map(a => this.convertAttachmentForUI(a)),
         reactions: msg.reactions,
         isOwn: msg.author === this.deviceId
       }))
